@@ -10,7 +10,9 @@
     "contact": "engineering@avetosdesign.com"
   },
   "license": "MIT",
-  "resources": {},
+  "resources": {
+    "homepage": "https://github.com/AvetosDesign/KiKitViewer"
+  },
   "versions": [
     {
       "version": "0.1.0",
