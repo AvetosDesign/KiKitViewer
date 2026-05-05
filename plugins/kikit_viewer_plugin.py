@@ -23,6 +23,7 @@ _MAIN_SCRIPT = _SRC_DIR / "kikit_viewer" / "main.py"
 # KiCad's pcbnew and scripting modules live here — must be on PYTHONPATH
 # so that kikit (which imports pcbnew at load time) can find it.
 _KICAD_SITE_PACKAGES = Path(sys.executable).parent / "Lib" / "site-packages"
+_REQUIRED_PACKAGES = ["PySide6", "kikit", "shapely", "qtawesome"]
 
 
 def _find_python() -> str:
@@ -54,6 +55,46 @@ def _find_python() -> str:
     return "python"
 
 
+def _check_dependencies(python_exe: str) -> list[str]:
+    """Return list of package names that cannot be imported by python_exe."""
+    probe = "; ".join(f"import {p}" for p in _REQUIRED_PACKAGES)
+    try:
+        result = subprocess.run(
+            [python_exe, "-c", probe],
+            capture_output=True, timeout=15,
+        )
+        if result.returncode == 0:
+            return []
+        missing = []
+        for pkg in _REQUIRED_PACKAGES:
+            r = subprocess.run(
+                [python_exe, "-c", f"import {pkg}"],
+                capture_output=True, timeout=10,
+            )
+            if r.returncode != 0:
+                missing.append(pkg)
+        return missing
+    except Exception:
+        return []  # can't probe — let the launch attempt proceed normally
+
+
+def _show_missing_deps_error(missing: list[str]) -> None:
+    pkgs = " ".join(missing)
+    msg = (
+        "KiKit Viewer: missing Python dependencies.\n\n"
+        "The following packages are not available in the selected Python interpreter:\n"
+        f"  {', '.join(missing)}\n\n"
+        f"Install them with:\n"
+        f"  pip install {pkgs}\n\n"
+        "Then restart KiCad."
+    )
+    try:
+        import wx  # type: ignore[import]
+        wx.MessageBox(msg, "KiKit Viewer", wx.OK | wx.ICON_ERROR)
+    except Exception:
+        print(msg, file=sys.stderr)
+
+
 class KiKitViewerPlugin(pcbnew.ActionPlugin if pcbnew else object):
     """
     pcbnew ActionPlugin — adds a KiKit Viewer button to the pcbnew toolbar.
@@ -78,6 +119,11 @@ class KiKitViewerPlugin(pcbnew.ActionPlugin if pcbnew else object):
         board_path = board.GetFileName() if board else ""
 
         python_exe = _find_python()
+
+        missing = _check_dependencies(python_exe)
+        if missing:
+            _show_missing_deps_error(missing)
+            return
 
         env = os.environ.copy()
         existing = env.get("PYTHONPATH", "")

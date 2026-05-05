@@ -6,12 +6,11 @@ A visual panel editor for [KiKit](https://github.com/yaqwsx/KiKit) that runs as 
 
 ## Features
 
-- **Live preview** — panel re-renders automatically as you adjust parameters (or manually via F5)
-- **Layout** — grid layout with rows, columns, spacing, rotation, and alternation; manual placement mode with drag-and-drop positioning
-- **Tabs** — fixed, spacing, corner, full, annotation, and manual tab placement; manual mode lets you drag tab markers onto board edges
-- **Framing** — frame, tight frame, rails (top/bottom or left/right); fiducials and tooling holes with draggable handles
-- **Corner treatment** — chamfer and fillet with per-axis control
-- **Layer visibility** — per-layer toggle with color swatches matching the active KiCad color theme
+- **Live preview** — Panel re-renders automatically as you adjust parameters (or manually via F5).  Live refresh can be disabled if desired.
+- **Layout** — Supports grid layout with rows, columns, spacing, rotation, and alternation as well as a manual placement mode with drag-and-drop positioning.
+- **Tabs** — Supports standard KiKit modes (fixed, spacing, corner, full, annotation) as well as manual tab placement. Manual mode lets you drag tab markers onto board edges.
+- **Framing** — Supports KiKit standard modes: frame, tight frame, rails (top/bottom or left/right); Fiducials and tooling holes have draggable handles for positioning them graphically.
+- **Layer visibility** — Per-layer toggle with color swatches matching the active KiCad color theme.
 - **Undo/Redo** — full undo stack (Ctrl+Z / Ctrl+Y)
 - **Save/Load** — `.kicad_panel` format (JSON); legacy `.kikit.json` files load cleanly
 - **Export** — copies the finished panel `.kicad_pcb` to a location of your choice
@@ -58,6 +57,13 @@ pip install kikit>=1.4 PySide6>=6.6 shapely>=2.0 qtawesome>=1.3
 | Ctrl+S | Save |
 | Delete | Remove selected tab marker (manual tabs mode) |
 
+### Manual board placement
+
+Switch the **Layout** panel to type **manual**, then:
+- Click a row in the position table to select a board, or click a board outline on the canvas to select its table row — a white outline appears on the canvas
+- Drag the outline to reposition the board
+- The table can be manually edited to change position and rotation.  Simply double-click any parameter to edit. 
+
 ### Manual tab placement
 
 Switch the **Tabs** panel to type **manual**, then:
@@ -66,16 +72,9 @@ Switch the **Tabs** panel to type **manual**, then:
 - Drag tab markers to reposition them (they snap to the board outline on release)
 - Right-click a marker → **Remove**, or select it and press **Delete**
 
-### Manual board placement
-
-Switch the **Layout** panel to type **manual**, then:
-- Click a row in the position table to select a board — a white outline appears on the canvas
-- Drag the outline to reposition the board
-- Click a board outline on the canvas to select its table row
-
 ## File format
 
-KiKit Viewer saves configurations as `.kicad_panel` files — standard JSON with an extra `kikit_viewer` section for UI state (layer visibility, etc.). The KiKit section is identical to a `.kikit.json` preset file and can be used directly with the KiKit CLI:
+KiKit Viewer saves configurations as `.kicad_panel` files — standard KiKit JSON with an extra `kikit_viewer` section for UI state (layer visibility, etc.). The KiKit section is identical to a `.kikit.json` preset file and can be used directly with the KiKit CLI:
 
 ```
 kikit panelize --preset my_panel.kicad_panel board.kicad_pcb panel.kicad_pcb
@@ -92,3 +91,6 @@ Produces `dist/kikit-viewer-{version}.zip` ready for KiCad's Plugin Content Mana
 ## License
 
 MIT — see [LICENSE](LICENSE).
+
+## AI Notice
+Claude Code was used in the creation of this plugin.  OpenAI (ChatGPT) was used to create the plugin icon.
