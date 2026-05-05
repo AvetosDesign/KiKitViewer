@@ -59,8 +59,13 @@ def _find_python() -> str:
 
 
 def _check_dependencies(python_exe: str) -> list[str]:
-    """Return list of package names that cannot be imported by python_exe."""
-    probe = "; ".join(f"import {p}" for p in _REQUIRED_PACKAGES)
+    """Return list of package names not found by python_exe."""
+    # Use find_spec rather than import so packages with heavy side-effects
+    # (e.g. kikit importing pcbnew at module level) are not actually executed.
+    probe = "; ".join(
+        f"assert __import__('importlib.util', fromlist=['']).find_spec('{p}') is not None"
+        for p in _REQUIRED_PACKAGES
+    )
     try:
         result = subprocess.run(
             [python_exe, "-c", probe],
@@ -71,7 +76,8 @@ def _check_dependencies(python_exe: str) -> list[str]:
         missing = []
         for pkg in _REQUIRED_PACKAGES:
             r = subprocess.run(
-                [python_exe, "-c", f"import {pkg}"],
+                [python_exe, "-c",
+                 f"import importlib.util; assert importlib.util.find_spec('{pkg}') is not None"],
                 capture_output=True, timeout=10,
             )
             if r.returncode != 0:
