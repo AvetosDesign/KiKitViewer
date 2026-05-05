@@ -269,6 +269,11 @@ class LayoutPanel(QWidget):
         self._model.set("layout", "positions", positions)
         self._on_selection_changed()
 
+    def set_board_geometry(self, w: float, h: float, edge_cuts_svg: str = "") -> None:
+        """Cache board dimensions and Edge_Cuts SVG returned by the panel worker."""
+        self._board_size = (w, h)
+        self._edge_cuts_svg = edge_cuts_svg or None
+
     def _invalidate_board_size(self) -> None:
         self._board_size = None
         self._edge_cuts_svg = None
@@ -419,18 +424,10 @@ class LayoutPanel(QWidget):
 
     def _seed_table_from_grid(self) -> None:
         """Pre-populate table positions by computing the current grid layout."""
-        board_path = self._model.board_path
-        if board_path is None:
+        size = self._get_board_size()
+        if size is None:
             return
-        try:
-            import pcbnew  # type: ignore[import]
-            board = pcbnew.LoadBoard(str(board_path))
-            bbox = board.GetBoardEdgesBoundingBox()
-            board_w = pcbnew.ToMM(bbox.GetWidth())
-            board_h = pcbnew.ToMM(bbox.GetHeight())
-            self._board_size = (board_w, board_h)
-        except Exception:
-            return
+        board_w, board_h = size
 
         try:
             rows = int(self._model.get("layout", "rows"))

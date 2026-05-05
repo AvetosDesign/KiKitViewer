@@ -4,8 +4,6 @@ import math
 from pathlib import Path
 from typing import TYPE_CHECKING
 
-import pcbnew as _pcbnew  # type: ignore[import]
-
 if TYPE_CHECKING:
     from shapely.geometry import LinearRing
 
@@ -41,14 +39,14 @@ def load_outline(board_path: Path) -> LinearRing | None:
         try:
             from kikit.substrate import Substrate  # type: ignore[import]
 
-            drawings = [d for d in board.GetDrawings() if d.GetLayer() == _pcbnew.Edge_Cuts]
+            drawings = [d for d in board.GetDrawings() if d.GetLayer() == pcbnew.Edge_Cuts]
             if drawings:
                 s = Substrate(drawings)
                 if not s.substrates.is_empty:
                     # Convert IU → mm and center at bounding-box centre (0, 0).
                     # Using bbox centre (not centroid) matches how LayoutPanel
                     # computes scene_cx from the board's bounding-box half-width.
-                    iu_per_mm = float(_pcbnew.FromMM(1))
+                    iu_per_mm = float(pcbnew.FromMM(1))
                     from shapely.affinity import scale, translate
 
                     poly_mm = scale(
@@ -145,3 +143,17 @@ def project_to_outline(
     angle_deg = math.degrees(math.atan2(ny, nx))
 
     return p_snap.x, p_snap.y, angle_deg
+
+
+def outline_from_points(pts: list) -> "LinearRing | None":
+    """
+    Reconstruct a LinearRing from a list of [x, y] pairs (as returned by the
+    panel worker). Does not require pcbnew — only Shapely.
+    """
+    if not pts or len(pts) < 3:
+        return None
+    try:
+        from shapely.geometry import LinearRing
+        return LinearRing(pts)
+    except Exception:
+        return None

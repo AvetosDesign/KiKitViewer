@@ -28,7 +28,29 @@ try:
     _KICAD_SITE_PACKAGES = str(Path(_pcbnew_probe.__file__).parent)
 except Exception:
     _KICAD_SITE_PACKAGES = str(Path(sys.executable).parent / "Lib" / "site-packages")
-_REQUIRED_PACKAGES = ["PySide6", "kikit", "shapely", "qtawesome"]
+# Packages required in the external Python (viewer process).
+# kikit is NOT listed here — it must be installed as a KiCad PCM plugin so that
+# it runs in KiCad's Python alongside pcbnew.
+_REQUIRED_PACKAGES = ["PySide6", "shapely", "qtawesome"]
+
+
+def _find_kicad_python() -> str:
+    """
+    Find the real python(.exe) binary for KiCad's embedded interpreter.
+
+    On Windows, sys.executable inside KiCad's scripting host points to the
+    KiCad application binary (kicad.exe / pcbnew.exe), not python.exe.
+    We look for python.exe in the same directory first.
+    """
+    kicad_dir = Path(sys.executable).parent
+    for name in ("python.exe", "python3.exe", "python3", "python"):
+        candidate = kicad_dir / name
+        if candidate.exists():
+            return str(candidate)
+    return sys.executable  # already python, or best guess
+
+
+_KICAD_PYTHON = _find_kicad_python()
 
 
 def _find_python() -> str:
@@ -119,6 +141,26 @@ def _check_dependencies(python_exe: str) -> list[str]:
         return []  # can't probe — let the launch attempt proceed normally
 
 
+def _check_kikit_plugin() -> bool:
+    """Return True if the KiKit PCM plugin is installed in KiCad's Python."""
+    import importlib.util
+    return importlib.util.find_spec("kikit") is not None
+
+
+def _show_missing_kikit_error() -> None:
+    msg = (
+        "KiKit Viewer requires the KiKit plugin to be installed in KiCad.\n\n"
+        "Install it via KiCad's Plugin Content Manager:\n"
+        "  Tools → Plugin and Content Manager → Plugins → search 'KiKit'\n\n"
+        "Then restart KiCad."
+    )
+    try:
+        import wx  # type: ignore[import]
+        wx.MessageBox(msg, "KiKit Viewer", wx.OK | wx.ICON_ERROR)
+    except Exception:
+        print(msg, file=sys.stderr)
+
+
 def _show_missing_deps_error(missing: list[str], python_exe: str) -> None:
     pkgs = " ".join(missing)
     msg = (
@@ -164,6 +206,10 @@ class KiKitViewerPlugin(pcbnew.ActionPlugin if pcbnew else object):
         board = pcbnew.GetBoard()
         board_path = board.GetFileName() if board else ""
 
+        if not _check_kikit_plugin():
+            _show_missing_kikit_error()
+            return
+
         python_exe = _find_python()
 
         missing = _check_dependencies(python_exe)
@@ -172,9 +218,10 @@ class KiKitViewerPlugin(pcbnew.ActionPlugin if pcbnew else object):
             return
 
         env = _clean_env()
-        env.pop("PYTHONHOME", None)  # ensure clean start before we set our own paths
-        extra = os.pathsep.join([str(_SRC_DIR), str(_KICAD_SITE_PACKAGES)])
-        env["PYTHONPATH"] = extra
+        env["PYTHONPATH"] = str(_SRC_DIR)
+        # Tell the viewer which Python to use for the panelization worker (KiCad's Python)
+        # and where KiCad's site-packages live (so the worker can import pcbnew/kikit).
+        env["KICAD_PYTHON"] = _KICAD_PYTHON
 
         subprocess.Popen(
             [python_exe, str(_MAIN_SCRIPT), board_path],

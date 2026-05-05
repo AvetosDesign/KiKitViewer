@@ -325,7 +325,7 @@ class MainWindow(QMainWindow):
         self._zoomout_action.triggered.connect(self._view.zoom_out)
         view_menu.addAction(self._zoomout_action)
         
-        self._fitview_action = _QAction(qta.icon('mdi6.fit-to-page-outline'), "Zoom to &Fit", self)
+        self._fitview_action = _QAction(qta.icon('mdi6.magnify-expand'), "Zoom to &Fit", self)
         self._fitview_action.setShortcut(Qt.CTRL | Qt.Key_0)
         self._fitview_action.triggered.connect(self._view.fit_panel)
         view_menu.addAction(self._fitview_action)
@@ -657,9 +657,19 @@ class MainWindow(QMainWindow):
     def _on_run_started(self) -> None:
         self._set_status("Running KiKit…")
 
-    def _on_run_finished(self, panel_path: Path) -> None:
+    def _on_run_finished(self, panel_path: Path, result: dict) -> None:
         self._last_preview = panel_path
-        self._scene.load_panel(panel_path, self._model.as_dict())
+        svgs = result.get("svgs", {})
+        board_w = result.get("board_w", 0.0)
+        board_h = result.get("board_h", 0.0)
+        board_svg = result.get("board_edge_cuts_svg", "")
+        outline_pts = result.get("board_outline_pts", [])
+        if board_w and board_h:
+            self._layout_panel.set_board_geometry(board_w, board_h, board_svg)
+        if outline_pts:
+            from kikit_viewer.geometry.board_outline import outline_from_points
+            self._board_outline = outline_from_points(outline_pts)
+        self._scene.load_panel(panel_path, self._model.as_dict(), svgs=svgs)
         if self._auto_fit_btn.isChecked():
             self._view.fit_panel()
         self._set_status("Panel updated")
@@ -714,6 +724,9 @@ class MainWindow(QMainWindow):
         self._board_outline = None
 
     def _ensure_board_outline(self) -> None:
+        # Outline is populated from the panel worker result in _on_run_finished.
+        # Fallback: try load_outline directly (works when pcbnew is available,
+        # e.g. running inside KiCad's Python for testing).
         if self._board_outline is not None:
             return
         board_path = self._model.board_path

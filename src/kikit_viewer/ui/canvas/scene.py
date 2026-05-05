@@ -151,6 +151,7 @@ class PanelScene(QGraphicsScene):
         self,
         panel_path: Path,
         config: dict[str, dict[str, Any]] | None = None,
+        svgs: dict[str, str] | None = None,
     ) -> None:
         """Render the panel PCB and replace all items in the scene."""
         self.clear()
@@ -164,10 +165,13 @@ class PanelScene(QGraphicsScene):
         self._tab_markers.clear()
         self._partition_line_items.clear()  # clear() already removed them
 
-        try:
-            layers = self._pcb_renderer.render_layers(panel_path)
-        except Exception:
-            return
+        if svgs is not None:
+            layers = svgs
+        else:
+            try:
+                layers = self._pcb_renderer.render_layers(panel_path)
+            except Exception:
+                return
 
         ordered = [n for n in _LAYER_ORDER if n in layers]
         ordered += [n for n in layers if n not in _LAYER_ORDER]

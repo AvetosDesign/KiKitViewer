@@ -18,11 +18,12 @@ A visual panel editor for [KiKit](https://github.com/yaqwsx/KiKit) that runs as 
 ## Requirements
 
 - **KiCad 8.0** or later
-- **Python 3.11+** (separate from KiCad's embedded Python)
+- **KiKit plugin** installed via KiCad's Plugin Content Manager (PCM)
+- **Python 3.8+** (separate from KiCad's embedded Python)
 - The following Python packages installed in your external Python environment:
 
 ```
-pip install kikit>=1.4 PySide6>=6.6 shapely>=2.0 qtawesome>=1.3
+pip install PySide6>=6.6 shapely>=2.0 qtawesome>=1.3
 ```
 
 ## Installation
@@ -30,11 +31,14 @@ pip install kikit>=1.4 PySide6>=6.6 shapely>=2.0 qtawesome>=1.3
 ### Via KiCad Plugin Content Manager (recommended)
 
 > PCM submission pending. In the meantime, use the manual method below.
+>
+> **Note:** The KiKit plugin (a separate PCM package) must be installed first regardless of which installation method you use.
 
 ### Manual installation
 
-1. Clone or download this repository.
-2. Run the install script for your platform. Each script writes a small stub into KiCad's scripting/plugins folder that points back to the cloned source — edits are live immediately without reinstalling.
+1. Install the **KiKit plugin** via KiCad's Plugin Content Manager: open KiCad, go to **Tools → Plugin and Content Manager → Plugins**, search for **KiKit**, and install it. Restart KiCad.
+2. Clone or download this repository.
+3. Run the install script for your platform. Each script writes a small stub into KiCad's scripting/plugins folder that points back to the cloned source — edits are live immediately without reinstalling.
 
    **Windows:**
    ```
@@ -53,7 +57,7 @@ pip install kikit>=1.4 PySide6>=6.6 shapely>=2.0 qtawesome>=1.3
    ```
    Installs to `~/Library/Preferences/kicad/9.0/scripting/plugins/`. Override the KiCad version with `KICAD_VER=8.0 bash install_plugin.sh`.
 
-3. Restart KiCad. A **KiKit Viewer** button will appear in the pcbnew toolbar.
+4. Restart KiCad. A **KiKit Viewer** button will appear in the pcbnew toolbar.
 
 ## Usage
 

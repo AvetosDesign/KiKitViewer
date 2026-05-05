@@ -32,7 +32,7 @@ class RunCoordinator(QObject):
     """
 
     run_started = Signal()
-    run_finished = Signal(Path)
+    run_finished = Signal(Path, dict)
     run_failed = Signal(str)
 
     def __init__(self, model: ConfigModel, parent: QObject | None = None) -> None:
@@ -96,8 +96,8 @@ class RunCoordinator(QObject):
         self._runner.start()
         self.run_started.emit()
 
-    def _on_finished(self, path: Path) -> None:
-        self.run_finished.emit(path)
+    def _on_finished(self, path: Path, svgs: dict) -> None:
+        self.run_finished.emit(path, svgs)
         self._check_pending()
 
     def _on_failed(self, message: str) -> None:
