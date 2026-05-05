@@ -36,18 +36,46 @@ _REQUIRED_PACKAGES = ["PySide6", "shapely", "qtawesome"]
 
 def _find_kicad_python() -> str:
     """
-    Find the real python(.exe) binary for KiCad's embedded interpreter.
+    Find the real Python binary for KiCad's embedded interpreter.
 
-    On Windows, sys.executable inside KiCad's scripting host points to the
-    KiCad application binary (kicad.exe / pcbnew.exe), not python.exe.
-    We look for python.exe in the same directory first.
+    sys.executable inside KiCad's scripting host often points to the KiCad
+    application binary rather than Python itself:
+      - Windows: kicad.exe / pcbnew.exe — python.exe is in the same directory
+      - macOS:   KiCad.app/Contents/MacOS/kicad — Python is deep inside the
+                 app bundle at ...Frameworks/Python.framework/Versions/X.Y/bin/
+
+    Strategy: search a set of candidate bin directories, trying specific
+    Python binary names in each.  The set is built from:
+      1. The directory containing sys.executable (works on Windows)
+      2. bin/ directories derived from _KICAD_SITE_PACKAGES by walking up the
+         directory tree (works on macOS where site-packages is inside the
+         Python.framework, 2–3 levels below the prefix that has a bin/)
     """
-    kicad_dir = Path(sys.executable).parent
-    for name in ("python.exe", "python3.exe", "python3", "python"):
-        candidate = kicad_dir / name
-        if candidate.exists():
-            return str(candidate)
-    return sys.executable  # already python, or best guess
+    candidate_dirs: list[Path] = [Path(sys.executable).parent]
+
+    # Walk up from site-packages to find a sibling bin/ directory.
+    try:
+        prefix = Path(_KICAD_SITE_PACKAGES)
+        for _ in range(4):          # stop after 4 levels to avoid runaway
+            prefix = prefix.parent
+            bin_dir = prefix / "bin"
+            if bin_dir.is_dir():
+                candidate_dirs.append(bin_dir)
+    except Exception:
+        pass
+
+    for bin_dir in candidate_dirs:
+        # Try versioned names first so we pick python3.11 over a generic stub
+        for pattern in (f"python3.{v}" for v in range(20, 7, -1)):
+            c = bin_dir / pattern
+            if c.exists():
+                return str(c)
+        for name in ("python.exe", "python3.exe", "python3", "python"):
+            c = bin_dir / name
+            if c.exists():
+                return str(c)
+
+    return sys.executable  # already a Python binary, or last resort
 
 
 _KICAD_PYTHON = _find_kicad_python()
