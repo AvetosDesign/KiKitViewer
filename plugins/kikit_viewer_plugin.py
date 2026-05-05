@@ -22,7 +22,12 @@ _MAIN_SCRIPT = _SRC_DIR / "kikit_viewer" / "main.py"
 
 # KiCad's pcbnew and scripting modules live here — must be on PYTHONPATH
 # so that kikit (which imports pcbnew at load time) can find it.
-_KICAD_SITE_PACKAGES = Path(sys.executable).parent / "Lib" / "site-packages"
+# Derive the path from pcbnew's actual location so this works on all platforms.
+try:
+    import pcbnew as _pcbnew_probe  # type: ignore[import]
+    _KICAD_SITE_PACKAGES = str(Path(_pcbnew_probe.__file__).parent)
+except Exception:
+    _KICAD_SITE_PACKAGES = str(Path(sys.executable).parent / "Lib" / "site-packages")
 _REQUIRED_PACKAGES = ["PySide6", "kikit", "shapely", "qtawesome"]
 
 
