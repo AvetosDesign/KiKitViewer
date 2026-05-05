@@ -1,0 +1,25 @@
+# Python
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+*.egg-info/
+.eggs/
+
+# Virtual environment
+.venv/
+venv/
+env/
+
+# Distribution
+dist/
+
+# IDE
+.vscode/
+.idea/
+
+# Runtime
+kikit_viewer_crash.log
+
+# Windows
+Thumbs.db
