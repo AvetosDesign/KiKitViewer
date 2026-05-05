@@ -34,7 +34,25 @@ pip install kikit>=1.4 PySide6>=6.6 shapely>=2.0 qtawesome>=1.3
 ### Manual installation
 
 1. Clone or download this repository.
-2. Run `install_plugin.bat` (Windows). This writes a stub into KiCad's scripting/plugins folder that points back to the cloned source — edits are live immediately.
+2. Run the install script for your platform. Each script writes a small stub into KiCad's scripting/plugins folder that points back to the cloned source — edits are live immediately without reinstalling.
+
+   **Windows:**
+   ```
+   install_plugin.bat
+   ```
+
+   **Linux:**
+   ```
+   bash install_plugin.sh
+   ```
+   Installs to `~/.local/share/kicad/9.0/scripting/plugins/`. Override the KiCad version with `KICAD_VER=8.0 bash install_plugin.sh`.
+
+   **macOS:**
+   ```
+   bash install_plugin.sh
+   ```
+   Installs to `~/Library/Preferences/kicad/9.0/scripting/plugins/`. Override the KiCad version with `KICAD_VER=8.0 bash install_plugin.sh`.
+
 3. Restart KiCad. A **KiKit Viewer** button will appear in the pcbnew toolbar.
 
 ## Usage
