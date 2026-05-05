@@ -43,12 +43,27 @@ def _find_python() -> str:
         if candidate.exists():
             return str(candidate)
 
-    # 2 & 3. System PATH — skip anything inside the KiCad installation
+    # 2. Common fixed locations on macOS (Homebrew, pyenv, python.org installer)
+    if sys.platform == "darwin":
+        for candidate in (
+            Path("/opt/homebrew/bin/python3"),   # Apple Silicon Homebrew
+            Path("/usr/local/bin/python3"),       # Intel Homebrew / python.org
+            Path("/usr/bin/python3"),             # macOS system Python
+        ):
+            if candidate.exists():
+                return str(candidate)
+
+    # 3. System PATH — skip anything inside the KiCad installation directory tree
     kicad_bin = Path(sys.executable).parent
-    for name in ("python", "python3"):
+    for name in ("python3", "python"):
         found = shutil.which(name)
-        if found and Path(found).parent != kicad_bin:
-            return found
+        if found:
+            found_path = Path(found).resolve()
+            # Exclude if it lives anywhere inside KiCad's app bundle / install dir
+            try:
+                found_path.relative_to(kicad_bin.parent)
+            except ValueError:
+                return found  # not inside KiCad tree — use it
 
     # Last resort: whatever python.exe lives next to KiCad's own executable
     kicad_python = kicad_bin / "python.exe"
@@ -87,14 +102,19 @@ def _check_dependencies(python_exe: str) -> list[str]:
         return []  # can't probe — let the launch attempt proceed normally
 
 
-def _show_missing_deps_error(missing: list[str]) -> None:
+def _show_missing_deps_error(missing: list[str], python_exe: str) -> None:
     pkgs = " ".join(missing)
     msg = (
         "KiKit Viewer: missing Python dependencies.\n\n"
         "The following packages are not available in the selected Python interpreter:\n"
         f"  {', '.join(missing)}\n\n"
+        f"Selected interpreter:\n"
+        f"  {python_exe}\n\n"
         f"Install them with:\n"
         f"  pip install {pkgs}\n\n"
+        "If the interpreter shown above is not the one you intended, install the\n"
+        "packages into that interpreter, or create a .venv in the KiKitViewer repo\n"
+        "directory with the required packages installed.\n\n"
         "Then restart KiCad."
     )
     try:
@@ -131,7 +151,7 @@ class KiKitViewerPlugin(pcbnew.ActionPlugin if pcbnew else object):
 
         missing = _check_dependencies(python_exe)
         if missing:
-            _show_missing_deps_error(missing)
+            _show_missing_deps_error(missing, python_exe)
             return
 
         env = os.environ.copy()
