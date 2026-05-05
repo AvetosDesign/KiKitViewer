@@ -73,6 +73,17 @@ def _find_python() -> str:
     return "python"
 
 
+def _clean_env() -> dict:
+    """Return os.environ with KiCad-injected Python overrides stripped."""
+    env = os.environ.copy()
+    # KiCad sets PYTHONHOME to its bundled Python. If inherited by an external
+    # interpreter, it causes that interpreter to look for packages in KiCad's
+    # Python home instead of its own, making all packages appear missing.
+    env.pop("PYTHONHOME", None)
+    env.pop("PYTHONPATH", None)
+    return env
+
+
 def _check_dependencies(python_exe: str) -> list[str]:
     """Return list of package names not found by python_exe."""
     # Use find_spec rather than import so packages with heavy side-effects
@@ -81,10 +92,11 @@ def _check_dependencies(python_exe: str) -> list[str]:
         f"assert __import__('importlib.util', fromlist=['']).find_spec('{p}') is not None"
         for p in _REQUIRED_PACKAGES
     )
+    env = _clean_env()
     try:
         result = subprocess.run(
             [python_exe, "-c", probe],
-            capture_output=True, timeout=15,
+            capture_output=True, timeout=15, env=env,
         )
         if result.returncode == 0:
             return []
@@ -93,7 +105,7 @@ def _check_dependencies(python_exe: str) -> list[str]:
             r = subprocess.run(
                 [python_exe, "-c",
                  f"import importlib.util; assert importlib.util.find_spec('{pkg}') is not None"],
-                capture_output=True, timeout=10,
+                capture_output=True, timeout=10, env=env,
             )
             if r.returncode != 0:
                 missing.append(pkg)
@@ -154,10 +166,10 @@ class KiKitViewerPlugin(pcbnew.ActionPlugin if pcbnew else object):
             _show_missing_deps_error(missing, python_exe)
             return
 
-        env = os.environ.copy()
-        existing = env.get("PYTHONPATH", "")
+        env = _clean_env()
+        env.pop("PYTHONHOME", None)  # ensure clean start before we set our own paths
         extra = os.pathsep.join([str(_SRC_DIR), str(_KICAD_SITE_PACKAGES)])
-        env["PYTHONPATH"] = f"{extra}{os.pathsep}{existing}" if existing else extra
+        env["PYTHONPATH"] = extra
 
         subprocess.Popen(
             [python_exe, str(_MAIN_SCRIPT), board_path],
