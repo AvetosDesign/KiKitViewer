@@ -35,10 +35,13 @@ def _find_python() -> str:
       2. 'python' on the system PATH that is not inside KiCad's bin
       3. 'python3' on the system PATH
     """
-    # 1. Project venv
-    venv_python = _PLUGIN_DIR.parent / ".venv" / "Scripts" / "python.exe"
-    if venv_python.exists():
-        return str(venv_python)
+    # 1. Project venv — Scripts/python.exe on Windows, bin/python on Unix
+    for candidate in (
+        _PLUGIN_DIR.parent / ".venv" / "Scripts" / "python.exe",
+        _PLUGIN_DIR.parent / ".venv" / "bin" / "python",
+    ):
+        if candidate.exists():
+            return str(candidate)
 
     # 2 & 3. System PATH — skip anything inside the KiCad installation
     kicad_bin = Path(sys.executable).parent
