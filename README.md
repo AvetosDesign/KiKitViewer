@@ -2,7 +2,7 @@
 
 A visual panel editor for [KiKit](https://github.com/yaqwsx/KiKit) that runs as a KiCad pcbnew plugin. Design and preview PCB panels interactively without editing JSON by hand.
 
-![KiKit Viewer](KiKitViewerIcon.png)
+![KiKit Viewer](docs/screenshot.png)
 
 ## Features
 
