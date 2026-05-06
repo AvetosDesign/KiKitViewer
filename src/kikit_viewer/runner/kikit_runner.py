@@ -59,11 +59,21 @@ class KiKitRunner(QThread):
 
     def _invoke_kikit(self) -> dict:
         from kikit_viewer.config.translation import to_kikit
+        import shutil
         kikit_config = _preprocess_config(to_kikit(self._config))
+
+        # Copy the original board to the temp directory before passing it to
+        # the worker.  pcbnew.LoadBoard() can create/touch auxiliary files
+        # (.kicad_pro, .kicad_prl) next to the board it opens; doing that
+        # inside the temp dir keeps the original project directory clean and
+        # prevents KiCad from seeing those side-effect writes and marking the
+        # open board as modified.
+        tmp_board = self._output_path.parent / self._board_path.name
+        shutil.copy2(self._board_path, tmp_board)
 
         worker = Path(__file__).parent / "panel_worker.py"
         payload = json.dumps({
-            "board_path":  str(self._board_path),
+            "board_path":  str(tmp_board),
             "output_path": str(self._output_path),
             "config":      kikit_config,
         })
