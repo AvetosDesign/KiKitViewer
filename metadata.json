@@ -3,7 +3,7 @@
   "name": "KiKit Viewer",
   "description": "Visual KiKit panel editor — design and preview PCB panels from within pcbnew",
   "description_full": "KiKit Viewer adds a toolbar button to pcbnew that opens a visual panel editor.\nAll KiKit panelization parameters (layout, tabs, framing, cuts) are exposed\nthrough a graphical interface with live preview. Requires the KiKit PCM plugin\nand a Python 3.11+ environment with PySide6, shapely, and qtawesome installed.",
-  "identifier": "com.avetosdesign.kikit-viewer",
+  "identifier": "com.github.avetosdesign.kikit-viewer",
   "type": "plugin",
   "author": {
     "name": "Avetos Design",
