@@ -77,8 +77,16 @@ def build(update_meta: bool = False) -> None:
     with tempfile.TemporaryDirectory() as tmp_str:
         tmp = Path(tmp_str)
 
-        # metadata.json
-        shutil.copy2(META_PATH, tmp / "metadata.json")
+        # metadata.json — strip repo-only fields before bundling into the zip.
+        # The PCM validator rejects download_url/sha256/size inside the package.
+        _REPO_ONLY_FIELDS = {"download_url", "download_sha256", "download_size", "install_size"}
+        pkg_meta = json.loads(META_PATH.read_text(encoding="utf-8"))
+        for ver in pkg_meta.get("versions", []):
+            for field in _REPO_ONLY_FIELDS:
+                ver.pop(field, None)
+        (tmp / "metadata.json").write_text(
+            json.dumps(pkg_meta, indent=2, ensure_ascii=False) + "\n", encoding="utf-8"
+        )
 
         # plugins/ — the KiCad ActionPlugin entry point
         plugins_dst = tmp / "plugins"
@@ -94,10 +102,10 @@ def build(update_meta: bool = False) -> None:
         pkg_dst.mkdir()
         install_size = _copy_tree(SRC_PKG, pkg_dst)
 
-        # Add the plugins/ files themselves to install size
-        for f in plugins_dst.iterdir():
-            if f.is_file():
-                install_size += f.stat().st_size
+        # Add all other files in the zip root (metadata.json, resources/)
+        for item in tmp.rglob("*"):
+            if item.is_file() and not item.is_relative_to(pkg_dst):
+                install_size += item.stat().st_size
 
         # resources/icon.png — 64x64 icon for the PCM browser
         resources_dst = tmp / "resources"
