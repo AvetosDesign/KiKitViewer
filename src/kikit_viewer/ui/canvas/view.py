@@ -21,8 +21,10 @@ class PanelView(QGraphicsView):
     refresh_requested = Signal()
     cursor_moved  = Signal(float, float)  # scene x_mm, y_mm
     cursor_left   = Signal()
-    canvas_clicked = Signal(float, float) # scene x_mm, y_mm — left click on non-interactive area
-    add_tab_requested = Signal(float, float) # scene x_mm, y_mm — "Add Tab Here" context menu
+    canvas_clicked = Signal(float, float, object)  # scene x_mm, y_mm, Qt.KeyboardModifiers
+    add_tab_requested = Signal(float, float)        # scene x_mm, y_mm — "Add Tab Here" context menu
+    float_committed = Signal(float, float)          # scene x_mm, y_mm — left-click commits paste
+    float_cancelled = Signal()                      # Escape or right-click cancels paste
 
     def __init__(self, parent=None) -> None:
         super().__init__(parent)
@@ -36,16 +38,39 @@ class PanelView(QGraphicsView):
         self._panning = False
         self._pan_start = None
         self._manual_tab_mode = False
+        self._float_mode = False
         self.setFocusPolicy(Qt.FocusPolicy.StrongFocus)
 
     def set_manual_tab_mode(self, enabled: bool) -> None:
         self._manual_tab_mode = enabled
+
+    def enter_float_mode(self) -> None:
+        """Enter paste-float mode: left-click commits, Escape/right-click cancels."""
+        self._float_mode = True
+        self.viewport().setMouseTracking(True)
+        self.setCursor(Qt.CursorShape.CrossCursor)
+
+    def exit_float_mode(self) -> None:
+        """Exit paste-float mode and restore the default cursor."""
+        self._float_mode = False
+        self.setCursor(Qt.CursorShape.ArrowCursor)
 
     # ------------------------------------------------------------------
     # Pan
     # ------------------------------------------------------------------
 
     def mousePressEvent(self, event):
+        if self._float_mode:
+            if event.button() == Qt.MouseButton.LeftButton:
+                scene_pos = self.mapToScene(event.position().toPoint())
+                self.float_committed.emit(scene_pos.x(), scene_pos.y())
+                event.accept()
+                return
+            elif event.button() == Qt.MouseButton.RightButton:
+                self.float_cancelled.emit()
+                event.accept()
+                return
+
         if event.button() == Qt.MouseButton.LeftButton:
             scene_pos = self.mapToScene(event.position().toPoint())
             item = self.scene().itemAt(scene_pos, self.transform()) if self.scene() else None
@@ -63,7 +88,7 @@ class PanelView(QGraphicsView):
                     break
                 check = check.parentItem()
             if not interactive:
-                self.canvas_clicked.emit(scene_pos.x(), scene_pos.y())
+                self.canvas_clicked.emit(scene_pos.x(), scene_pos.y(), event.modifiers())
                 event.accept()
             else:
                 super().mousePressEvent(event)
@@ -139,6 +164,10 @@ class PanelView(QGraphicsView):
             super().wheelEvent(event)
 
     def keyPressEvent(self, event) -> None:
+        if self._float_mode and event.key() == Qt.Key.Key_Escape:
+            self.float_cancelled.emit()
+            event.accept()
+            return
         if event.key() == Qt.Key.Key_Delete and self.scene():
             from kikit_viewer.ui.canvas.tab_marker_item import TabMarkerItem
             for item in self.scene().selectedItems():

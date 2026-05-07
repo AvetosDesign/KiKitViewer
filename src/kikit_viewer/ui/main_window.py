@@ -6,7 +6,7 @@ from pathlib import Path
 
 import qtawesome as qta
 from PySide6.QtCore import QSettings, QSize, Qt
-from PySide6.QtGui import QColor, QPainter
+from PySide6.QtGui import QColor, QKeySequence, QPainter, QShortcut
 from PySide6.QtWidgets import (
     QDockWidget,
     QHBoxLayout,
@@ -104,6 +104,10 @@ class MainWindow(QMainWindow):
         self._model.board_path_changed.connect(lambda _: self._clear_board_outline())
         self._hover_board_idx: int | None = None
 
+        # Clipboard + float-mode state for copy/paste
+        self._board_clipboard: list[dict] = []
+        self._float_mode: bool = False
+
         # Canvas
         self._scene = PanelScene()
         self._view = PanelView()
@@ -158,8 +162,12 @@ class MainWindow(QMainWindow):
         self._scene.layers_loaded.connect(self._layers_panel.populate)
         self._scene.panel_size_changed.connect(self._on_panel_size_changed)
 
-        self._layout_panel.board_highlighted.connect(self._on_board_highlighted)
+        # Multi-board overlay path (manual layout mode)
+        self._layout_panel.boards_highlighted.connect(self._on_boards_highlighted)
         self._layout_panel.board_deselected.connect(self._scene.clear_board_highlight)
+        self._scene.boards_positions_updated.connect(self._layout_panel.apply_multi_board_drop)
+        # Legacy single-board path (grid mode → tabs panel)
+        self._layout_panel.board_highlighted.connect(self._on_board_highlighted)
         self._scene.board_position_updated.connect(self._layout_panel.apply_board_drop)
 
         self._view.refresh_requested.connect(self._refresh_now)
@@ -178,6 +186,10 @@ class MainWindow(QMainWindow):
         self._param_tabs.currentChanged.connect(self._on_param_tab_changed)
         self._model.config_changed.connect(self._sync_tab_mode)
         self._view.add_tab_requested.connect(self._on_tab_placement_requested)
+
+        # Float mode (paste) signals
+        self._view.float_committed.connect(self._on_float_committed)
+        self._view.float_cancelled.connect(self._on_float_cancelled)
 
         self._build_menu()
         self._build_toolbar()
@@ -258,8 +270,7 @@ class MainWindow(QMainWindow):
     def _build_menu(self) -> None:
         from PySide6.QtGui import QAction as _QAction
         from PySide6.QtGui import QKeySequence as _QKS
-        from PySide6.QtGui import QShortcut as _QShortcut
-        
+
         bar = self.menuBar()
 
         # File menu
@@ -307,6 +318,17 @@ class MainWindow(QMainWindow):
         self._redo_action.triggered.connect(self._model.redo)
         edit_menu.addAction(self._redo_action)
 
+        edit_menu.addSeparator()
+        self._copy_action = _QAction(qta.icon('mdi6.content-copy'), "&Copy Board(s)", self)
+        self._copy_action.setShortcut(_QKS.StandardKey.Copy)
+        self._copy_action.triggered.connect(self._on_copy_boards)
+        edit_menu.addAction(self._copy_action)
+
+        self._paste_action = _QAction(qta.icon('mdi6.content-paste'), "&Paste Board(s)", self)
+        self._paste_action.setShortcut(_QKS.StandardKey.Paste)
+        self._paste_action.triggered.connect(self._on_paste_boards)
+        edit_menu.addAction(self._paste_action)
+
         # View menu
         view_menu = bar.addMenu("&View")
         self._refresh_action = _QAction(qta.icon('mdi6.refresh'), "&Refresh", self)
@@ -324,40 +346,26 @@ class MainWindow(QMainWindow):
         self._zoomout_action.setShortcut(_QKS.StandardKey.ZoomOut)
         self._zoomout_action.triggered.connect(self._view.zoom_out)
         view_menu.addAction(self._zoomout_action)
-        
+
         self._fitview_action = _QAction(qta.icon('mdi6.magnify-expand'), "Zoom to &Fit", self)
         self._fitview_action.setShortcut(Qt.CTRL | Qt.Key_0)
         self._fitview_action.triggered.connect(self._view.fit_panel)
         view_menu.addAction(self._fitview_action)
 
-        #view_menu.addSeparator()
-        #_ar = _QAction3(qta.icon('mdi6.autorenew'), "&Auto Refresh", self)
-        #_ar.setCheckable(True)
-        #_ar.setChecked(self._auto_refresh_btn.isChecked())
-        #_ar.toggled.connect(self._auto_refresh_btn.setChecked)
-        #self._auto_refresh_btn.toggled.connect(_ar.setChecked)
-        #view_menu.addAction(_ar)
-        #_af = _QAction3(qta.icon('mdi6.fit-to-page-outline'), "Auto &Fit", self)
-        #_af.setCheckable(True)
-        #_af.setChecked(self._auto_fit_btn.isChecked())
-        #_af.toggled.connect(self._auto_fit_btn.setChecked)
-        #self._auto_fit_btn.toggled.connect(_af.setChecked)
-        #view_menu.addAction(_af)
-        
         view_menu.addSeparator()
         view_menu.addAction(self._layers_dock.toggleViewAction())
         view_menu.addAction(self._debug_dock.toggleViewAction())
 
-        _QShortcut(_QKS(Qt.Key.Key_Home), self, self._view.fit_panel)
+        QShortcut(QKeySequence(Qt.Key.Key_Home), self, self._view.fit_panel)
 
     def _build_toolbar(self) -> None:
         from PySide6.QtWidgets import QToolBar as _QToolBar
-        
+
         tb = _QToolBar("Main", self)
         tb.setObjectName("MainToolBar")
         tb.setMovable(False)
         tb.setIconSize(QSize(32, 32))
-        
+
         # File handling section
         tb.addAction(self._save_action)
         tb.addAction(self._export_action)
@@ -476,14 +484,17 @@ class MainWindow(QMainWindow):
 
     def _on_cursor_moved(self, x: float, y: float) -> None:
         self._cursor_label.setText(f"X {x:.2f}  Y {y:.2f}")
-        self._update_hover_from_canvas(x, y)
+        if self._float_mode:
+            self._scene.update_float_positions(x, y)
+        else:
+            self._update_hover_from_canvas(x, y)
 
     def _on_canvas_cursor_left(self) -> None:
         self._cursor_label.clear()
         self._on_board_hover_cleared()
 
-    def _on_canvas_clicked(self, x: float, y: float) -> None:
-        import math
+    def _on_canvas_clicked(self, x: float, y: float, modifiers=None) -> None:
+        """Left-click on non-interactive canvas area — select or Ctrl+click to toggle."""
         for row in range(self._layout_panel.board_count):
             data = self._layout_panel.board_scene_data(row)
             if data is None:
@@ -494,7 +505,15 @@ class MainWindow(QMainWindow):
             lx =  dx * math.cos(rad) + dy * math.sin(rad)
             ly = -dx * math.sin(rad) + dy * math.cos(rad)
             if abs(lx) <= w / 2 and abs(ly) <= h / 2:
-                self._layout_panel.select_row(row)
+                if modifiers and (modifiers & Qt.KeyboardModifier.ControlModifier):
+                    current = set(self._layout_panel.selected_rows)
+                    if row in current:
+                        current.discard(row)
+                    else:
+                        current.add(row)
+                    self._layout_panel.set_selected_rows(sorted(current))
+                else:
+                    self._layout_panel.select_row(row)
                 return
 
     def _on_board_table_hovered(self, row: int) -> None:
@@ -522,7 +541,6 @@ class MainWindow(QMainWindow):
             self._scene.clear_board_hover()
 
     def _update_hover_from_canvas(self, x: float, y: float) -> None:
-        import math
         hit = -1
         for row in range(self._layout_panel.board_count):
             data = self._layout_panel.board_scene_data(row)
@@ -636,10 +654,119 @@ class MainWindow(QMainWindow):
             QMessageBox.critical(self, "Export failed", str(exc))
 
     # ------------------------------------------------------------------
+    # Copy / Paste
+    # ------------------------------------------------------------------
+
+    def _on_copy_boards(self) -> None:
+        try:
+            if self._model.get("layout", "type") != "manual":
+                return
+        except KeyError:
+            return
+        positions = self._model.get("layout", "positions") or []
+        self._board_clipboard = [
+            dict(positions[row]) for row in self._layout_panel.selected_rows
+            if row < len(positions)
+        ]
+
+    def _on_paste_boards(self) -> None:
+        if not self._board_clipboard:
+            return
+        try:
+            if self._model.get("layout", "type") != "manual":
+                return
+        except KeyError:
+            return
+        if self._float_mode:
+            return  # already in float mode
+
+        origin = self._layout_panel.panel_origin()
+        if origin is None:
+            return
+        ox, oy = origin
+        w_h = self._layout_panel.board_size
+        if w_h is None:
+            return
+        w, h = w_h
+        svg = self._layout_panel.edge_cuts_svg or ""
+
+        self._scene.set_float_overlays(self._board_clipboard, ox, oy, w, h, svg)
+        self._view.enter_float_mode()
+        self._float_mode = True
+
+    # ------------------------------------------------------------------
+    # Float mode (paste placement)
+    # ------------------------------------------------------------------
+
+    def _on_float_committed(self, cursor_cx: float, cursor_cy: float) -> None:
+        self._scene.update_float_positions(cursor_cx, cursor_cy)
+        finals = self._scene.float_final_positions()  # [(scene_cx, scene_cy, rot), ...]
+        origin = self._layout_panel.panel_origin()
+        if origin is None:
+            self._cleanup_float()
+            return
+        ox, oy = origin
+        positions = list(self._model.get("layout", "positions") or [])
+        new_rows_start = len(positions)
+        for scene_cx, scene_cy, rot in finals:
+            positions.append({
+                "x": round(scene_cx + ox, 3),
+                "y": round(scene_cy + oy, 3),
+                "rotation": round(rot, 3),
+            })
+        self._cleanup_float()
+        self._model.set("layout", "positions", positions)
+        new_rows = list(range(new_rows_start, len(positions)))
+        self._layout_panel.set_selected_rows(new_rows)
+
+    def _on_float_cancelled(self) -> None:
+        self._cleanup_float()
+
+    def _cleanup_float(self) -> None:
+        self._scene.clear_float_overlays()
+        self._view.exit_float_mode()
+        self._float_mode = False
+
+    # ------------------------------------------------------------------
     # Run coordinator slots
     # ------------------------------------------------------------------
 
+    def _on_boards_highlighted(self, overlays: list) -> None:
+        """Handle multi-board overlay updates for the manual layout mode.
+
+        When the Tabs tab is active in manual-tabs mode, delegates to the single-board
+        highlight path (which adds tab markers). Otherwise, calls set_board_overlays()
+        so all boards are visible with selected ones highlighted.
+        """
+        on_tabs_tab = self._param_tabs.currentIndex() == self._TABS_TAB_INDEX
+        try:
+            is_manual_tabs = self._model.get("tabs", "type") == "manual"
+        except KeyError:
+            is_manual_tabs = False
+
+        if on_tabs_tab and is_manual_tabs:
+            # Show single board with tab markers
+            selected = [o for o in overlays if o[7]]  # is_selected at index 7
+            if not selected:
+                self._scene.clear_board_highlight()
+                return
+            row, cx, cy, w, h, rot, svg, _ = selected[0]
+            self._last_highlight_cx = cx
+            self._last_highlight_cy = cy
+            self._last_highlight_rot = rot
+            try:
+                tab_positions = list(self._model.get("tabs", "positions") or [])
+            except KeyError:
+                tab_positions = []
+            self._scene.highlight_board(cx, cy, w, h, rot, svg, tab_positions=tab_positions)
+        else:
+            if not overlays:
+                self._scene.clear_board_highlight()
+                return
+            self._scene.set_board_overlays(overlays)
+
     def _on_board_highlighted(self, svg: str, x: float, y: float, w: float, h: float, rot: float) -> None:
+        """Handle single-board highlight (grid mode → tabs panel path only)."""
         self._last_highlight_cx = x
         self._last_highlight_cy = y
         self._last_highlight_rot = rot

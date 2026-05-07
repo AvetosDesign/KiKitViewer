@@ -5,6 +5,7 @@ from typing import Any
 from PySide6.QtCore import QEvent, QItemSelectionModel, Qt, QTimer, Signal
 from PySide6.QtWidgets import (
     QAbstractItemDelegate,
+    QAbstractItemView,
     QComboBox,
     QDoubleSpinBox,
     QFormLayout,
@@ -93,6 +94,7 @@ class LayoutPanel(QWidget):
     """
 
     board_highlighted   = Signal(str, float, float, float, float, float)  # svg, x, y, w, h, rotation
+    boards_highlighted  = Signal(list)   # list of (row, cx, cy, w, h, rot, svg, is_selected) tuples
     board_deselected    = Signal()
     board_hovered       = Signal(int)   # table row index
     board_hover_cleared = Signal()
@@ -152,6 +154,7 @@ class LayoutPanel(QWidget):
         self._table.setHorizontalHeaderLabels(["X (mm)", "Y (mm)", "Rotation (°)"])
         self._table.horizontalHeader().setSectionResizeMode(QHeaderView.ResizeMode.Stretch)
         self._table.setSelectionBehavior(QTableWidget.SelectionBehavior.SelectRows)
+        self._table.setSelectionMode(QAbstractItemView.SelectionMode.ExtendedSelection)
         self._table.setItemDelegate(_RowCycleDelegate(self._table))
         self._table.itemChanged.connect(self._on_table_changed)
         self._table.itemSelectionChanged.connect(self._on_selection_changed)
@@ -328,10 +331,38 @@ class LayoutPanel(QWidget):
     def board_count(self) -> int:
         return self._table.rowCount()
 
+    @property
+    def selected_rows(self) -> list[int]:
+        return sorted({idx.row() for idx in self._table.selectionModel().selectedRows()})
+
+    @property
+    def board_size(self) -> tuple[float, float] | None:
+        return self._get_board_size()
+
+    @property
+    def edge_cuts_svg(self) -> str | None:
+        return self._get_edge_cuts_svg()
+
+    def panel_origin(self) -> tuple[float, float] | None:
+        """Return (panel_ox, panel_oy) — public alias for use by MainWindow."""
+        return self._compute_panel_origin()
+
     def select_row(self, row: int) -> None:
-        """Programmatically select a row, triggering the full highlight pipeline."""
+        """Programmatically select a single row, clearing other selections."""
         if 0 <= row < self._table.rowCount():
             self._table.selectRow(row)
+
+    def set_selected_rows(self, rows: list[int]) -> None:
+        """Programmatically select multiple rows without clearing all at once."""
+        sm = self._table.selectionModel()
+        sm.clearSelection()
+        for row in rows:
+            if 0 <= row < self._table.rowCount():
+                sm.select(
+                    self._table.model().index(row, 0),
+                    QItemSelectionModel.SelectionFlag.Select
+                    | QItemSelectionModel.SelectionFlag.Rows,
+                )
 
     def set_canvas_hover_row(self, row: int | None) -> None:
         """Called by MainWindow to show a focus indicator for the canvas-hovered row."""
@@ -404,23 +435,37 @@ class LayoutPanel(QWidget):
     def _on_selection_changed(self) -> None:
         if self._refreshing:
             return
-        rows = sorted({idx.row() for idx in self._table.selectedIndexes()})
+        selected_rows = {idx.row() for idx in self._table.selectedIndexes()}
+        rows = sorted(selected_rows)
+
         if rows:
             self._last_selected_row = rows[0]
+
         if not rows:
             self.board_deselected.emit()
             return
-        row = rows[0]
-        data = self.board_scene_data(row)
-        if data is None:
-            self.board_deselected.emit()
-            return
-        scene_cx, scene_cy, w, h, rotation, svg = data
-        # Cache panel origin for apply_board_drop
+
+        # Update panel origin cache
         origin = self._compute_panel_origin()
         if origin:
             self._panel_ox, self._panel_oy = origin
-        self.board_highlighted.emit(svg, scene_cx, scene_cy, w, h, rotation)
+
+        # Build overlay list for all boards (used by MainWindow for set_board_overlays)
+        overlays = []
+        for row in range(self._table.rowCount()):
+            data = self.board_scene_data(row)
+            if data is None:
+                continue
+            cx, cy, w, h, rot, svg = data
+            overlays.append((row, cx, cy, w, h, rot, svg, row in selected_rows))
+        self.boards_highlighted.emit(overlays)
+
+        # Also emit legacy single-board signal (for grid-mode tabs path in highlight_first_board)
+        row = rows[0]
+        data = self.board_scene_data(row)
+        if data is not None:
+            cx, cy, w, h, rot, svg = data
+            self.board_highlighted.emit(svg, cx, cy, w, h, rot)
 
     def _seed_table_from_grid(self) -> None:
         """Pre-populate table positions by computing the current grid layout."""
@@ -516,7 +561,7 @@ class LayoutPanel(QWidget):
             self._on_selection_changed()
 
     def apply_board_drop(self, scene_cx: float, scene_cy: float) -> None:
-        """Update the selected table row from a drag-drop on the canvas highlight."""
+        """Update the selected table row from a drag-drop on the canvas highlight (single-board path)."""
         rows = sorted({idx.row() for idx in self._table.selectedIndexes()})
         if not rows:
             return
@@ -534,10 +579,34 @@ class LayoutPanel(QWidget):
         finally:
             self._refreshing = False
         self._on_table_changed()
-        # _on_table_changed → model.set → config_changed → _refresh rebuilds the
-        # table from scratch, which clears the selection.  Restore it so the
-        # highlight stays visible after the drop.
         self._table.selectRow(row)
+
+    def apply_multi_board_drop(self, moves: dict) -> None:
+        """Update multiple table rows from a multi-board drag on the canvas.
+
+        moves: dict mapping row → (new_scene_cx, new_scene_cy)
+        """
+        origin = self._compute_panel_origin()
+        if origin is None:
+            return
+        ox, oy = origin
+        moved_rows = sorted(moves.keys())
+        self._refreshing = True
+        try:
+            for row, (scene_cx, scene_cy) in moves.items():
+                new_x = round(scene_cx + ox, 3)
+                new_y = round(scene_cy + oy, 3)
+                ix = self._table.item(row, 0)
+                iy = self._table.item(row, 1)
+                if ix:
+                    ix.setText(str(new_x))
+                if iy:
+                    iy.setText(str(new_y))
+        finally:
+            self._refreshing = False
+        self._on_table_changed()
+        # Restore selection so overlays are refreshed for all moved boards
+        self.set_selected_rows(moved_rows)
 
     # ------------------------------------------------------------------
     # Refresh
