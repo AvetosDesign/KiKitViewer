@@ -25,6 +25,7 @@ _MAIN_SCRIPT = _SRC_DIR / "kikit_viewer" / "main.py"
 # Derive the path from pcbnew's actual location so this works on all platforms.
 try:
     import pcbnew as _pcbnew_probe  # type: ignore[import]
+
     _KICAD_SITE_PACKAGES = str(Path(_pcbnew_probe.__file__).parent)
 except Exception:
     _KICAD_SITE_PACKAGES = str(Path(sys.executable).parent / "Lib" / "site-packages")
@@ -56,7 +57,7 @@ def _find_kicad_python() -> str:
     # Walk up from site-packages to find a sibling bin/ directory.
     try:
         prefix = Path(_KICAD_SITE_PACKAGES)
-        for _ in range(4):          # stop after 4 levels to avoid runaway
+        for _ in range(4):  # stop after 4 levels to avoid runaway
             prefix = prefix.parent
             bin_dir = prefix / "bin"
             if bin_dir.is_dir():
@@ -101,9 +102,9 @@ def _find_python() -> str:
     # 2. Common fixed locations on macOS (Homebrew, pyenv, python.org installer)
     if sys.platform == "darwin":
         for candidate in (
-            Path("/opt/homebrew/bin/python3"),   # Apple Silicon Homebrew
-            Path("/usr/local/bin/python3"),       # Intel Homebrew / python.org
-            Path("/usr/bin/python3"),             # macOS system Python
+            Path("/opt/homebrew/bin/python3"),  # Apple Silicon Homebrew
+            Path("/usr/local/bin/python3"),  # Intel Homebrew / python.org
+            Path("/usr/bin/python3"),  # macOS system Python
         ):
             if candidate.exists():
                 return str(candidate)
@@ -151,16 +152,23 @@ def _check_dependencies(python_exe: str) -> list[str]:
     try:
         result = subprocess.run(
             [python_exe, "-c", probe],
-            capture_output=True, timeout=15, env=env,
+            capture_output=True,
+            timeout=15,
+            env=env,
         )
         if result.returncode == 0:
             return []
         missing = []
         for pkg in _REQUIRED_PACKAGES:
             r = subprocess.run(
-                [python_exe, "-c",
-                 f"import importlib.util; assert importlib.util.find_spec('{pkg}') is not None"],
-                capture_output=True, timeout=10, env=env,
+                [
+                    python_exe,
+                    "-c",
+                    f"import importlib.util; assert importlib.util.find_spec('{pkg}') is not None",
+                ],
+                capture_output=True,
+                timeout=10,
+                env=env,
             )
             if r.returncode != 0:
                 missing.append(pkg)
@@ -172,6 +180,7 @@ def _check_dependencies(python_exe: str) -> list[str]:
 def _check_kikit_plugin() -> bool:
     """Return True if the KiKit PCM plugin is installed in KiCad's Python."""
     import importlib.util
+
     return importlib.util.find_spec("kikit") is not None
 
 
@@ -184,6 +193,7 @@ def _show_missing_kikit_error() -> None:
     )
     try:
         import wx  # type: ignore[import]
+
         wx.MessageBox(msg, "KiKit Viewer", wx.OK | wx.ICON_ERROR)
     except Exception:
         print(msg, file=sys.stderr)
@@ -206,6 +216,7 @@ def _show_missing_deps_error(missing: list[str], python_exe: str) -> None:
     )
     try:
         import wx  # type: ignore[import]
+
         wx.MessageBox(msg, "KiKit Viewer", wx.OK | wx.ICON_ERROR)
     except Exception:
         print(msg, file=sys.stderr)
@@ -257,3 +268,15 @@ class KiKitViewerPlugin(pcbnew.ActionPlugin if pcbnew else object):
             # Detach so closing pcbnew doesn't kill the viewer
             creationflags=subprocess.DETACHED_PROCESS if sys.platform == "win32" else 0,
         )
+
+        # Tell pcbnew we haven't modified the board.  Belt-and-suspenders
+        # alongside copying the board to a temp dir in the worker; covers the
+        # case where KiCad's in-memory modification flag gets set for any
+        # other reason during plugin execution.
+        try:
+            board.ClearModified()
+        except Exception:
+            try:
+                board.ClearFlags(pcbnew.IS_MODIFIED)
+            except Exception:
+                pass
