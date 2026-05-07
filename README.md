@@ -38,24 +38,20 @@ pip install PySide6>=6.6 shapely>=2.0 qtawesome>=1.3
 
 1. Install the **KiKit plugin** via KiCad's Plugin Content Manager: open KiCad, go to **Tools → Plugin and Content Manager → Plugins**, search for **KiKit**, and install it. Restart KiCad.
 2. Clone or download this repository.
-3. Run the install script for your platform. Each script writes a small stub into KiCad's scripting/plugins folder that points back to the cloned source — edits are live immediately without reinstalling.
+3. Run the install script. It writes a small stub into KiCad's scripting/plugins folder that points back to the cloned source — edits are live immediately without reinstalling.
 
-   **Windows:**
    ```
-   install_plugin.bat
+   python install_plugin.py
    ```
 
-   **Linux:**
-   ```
-   bash install_plugin.sh
-   ```
-   Installs to `~/.local/share/kicad/9.0/scripting/plugins/`. Override the KiCad version with `KICAD_VER=8.0 bash install_plugin.sh`.
+   The script auto-detects all installed KiCad versions and targets the newest one. To see what was found, or to target a specific version:
 
-   **macOS:**
    ```
-   bash install_plugin.sh
+   python install_plugin.py --list
+   python install_plugin.py 9.0
    ```
-   Installs to `~/Library/Preferences/kicad/9.0/scripting/plugins/`. Override the KiCad version with `KICAD_VER=8.0 bash install_plugin.sh`.
+
+   Works on Windows, macOS, and Linux.
 
 4. Restart KiCad. A **KiKit Viewer** button will appear in the pcbnew toolbar.
 
