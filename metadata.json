@@ -27,9 +27,9 @@
         "macos"
       ],
       "download_url": "https://github.com/AvetosDesign/KiKitViewer/releases/download/v1.0.0/kikit-viewer-1.0.0.zip",
-      "download_sha256": "f401b903cac37c2782533612b029477ff958b40ab10abac9ce382ee5980e3ecc",
+      "download_sha256": "0900d945fcb44ccc619328df0a0e01ddf8fb28a675290392edf8b519b1b18d77",
       "download_size": 96186,
-      "install_size": 233859
+      "install_size": 243178
     }
   ]
 }

@@ -124,9 +124,13 @@ def build(update_meta: bool = False) -> None:
                 if item.is_file():
                     zf.write(item, item.relative_to(tmp))
 
-    # Stats
+    # Stats — read install_size from the zip's stored uncompressed sizes so it
+    # matches exactly what the PCM validator measures when it extracts the archive.
+    zip_bytes = zip_path.read_bytes()
     download_size = zip_path.stat().st_size
-    sha256 = hashlib.sha256(zip_path.read_bytes()).hexdigest()
+    sha256 = hashlib.sha256(zip_bytes).hexdigest()
+    with zipfile.ZipFile(zip_path, "r") as zf:
+        install_size = sum(info.file_size for info in zf.infolist())
 
     print(f"Output:        {zip_path}")
     print(f"download_size: {download_size}")
