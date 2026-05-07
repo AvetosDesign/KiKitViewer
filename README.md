@@ -6,14 +6,14 @@ A visual panel editor for [KiKit](https://github.com/yaqwsx/KiKit) that runs as 
 
 ## Features
 
-- **Live preview** — Panel re-renders automatically as you adjust parameters (or manually via F5).  Live refresh can be disabled if desired.
+- **Live preview** — Panel re-renders automatically as you adjust parameters (or manually via F5).  Live refresh can be enabled or disabled with a click.
 - **Layout** — Supports grid layout with rows, columns, spacing, rotation, and alternation as well as a manual placement mode with drag-and-drop positioning.
 - **Tabs** — Supports standard KiKit modes (fixed, spacing, corner, full, annotation) as well as manual tab placement. Manual mode lets you drag tab markers onto board edges.
 - **Framing** — Supports KiKit standard modes: frame, tight frame, rails (top/bottom or left/right); Fiducials and tooling holes have draggable handles for positioning them graphically.
 - **Layer visibility** — Per-layer toggle with color swatches matching the active KiCad color theme.
 - **Undo/Redo** — full undo stack (Ctrl+Z / Ctrl+Y)
 - **Save/Load** — `.kicad_panel` format (JSON); legacy `.kikit.json` files load cleanly
-- **Export** — copies the finished panel `.kicad_pcb` to a location of your choice
+- **Export** — copies the finished panel as a standard KiCad PCB file (`*.kicad_pcb`) to a location of your choice
 
 ## Requirements
 
@@ -36,9 +36,9 @@ pip install PySide6>=6.6 shapely>=2.0 qtawesome>=1.3
 
 ### Manual installation
 
-1. Install the **KiKit plugin** via KiCad's Plugin Content Manager: open KiCad, go to **Tools → Plugin and Content Manager → Plugins**, search for **KiKit**, and install it. Restart KiCad.
+1. Install the **KiKit plugin** by following the directions at https://yaqwsx.github.io/KiKit/latest/installation/intro/, then restart KiCad.
 2. Clone or download this repository.
-3. Run the install script. It writes a small stub into KiCad's scripting/plugins folder that points back to the cloned source — edits are live immediately without reinstalling.
+3. Run the install script. It writes a small stub into KiCad's scripting/plugins folder that points back to the cloned source.
 
    ```
    python install_plugin.py
@@ -97,14 +97,6 @@ KiKit Viewer saves configurations as `.kicad_panel` files — standard KiKit JSO
 ```
 kikit panelize --preset my_panel.kicad_panel board.kicad_pcb panel.kicad_pcb
 ```
-
-## Building the PCM package
-
-```
-python scripts/build_pcm.py
-```
-
-Produces `dist/kikit-viewer-{version}.zip` ready for KiCad's Plugin Content Manager. Run with `--update-meta` to stamp the SHA256 and sizes into `metadata.json` automatically.
 
 ## License
 
