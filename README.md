@@ -19,7 +19,7 @@ A visual panel editor for [KiKit](https://github.com/yaqwsx/KiKit) that runs as 
 
 - **KiCad 8.0** or later
 - **KiKit plugin** installed via KiCad's Plugin Content Manager (PCM)
-- **Python 3.8+** (separate from KiCad's embedded Python)
+- **Python 3.11+** (separate from KiCad's embedded Python)
 - The following Python packages installed in your external Python environment:
 
 ```

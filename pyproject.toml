@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "kikit-viewer"
-version = "0.1.0"
+version = "1.0.0"
 description = "Visual KiKit panel editor — pcbnew plugin"
 readme = "README.md"
 requires-python = ">=3.11"
@@ -12,7 +12,6 @@ authors = [{ name = "Avetos Design", email = "engineering@avetosdesign.com" }]
 license = { text = "MIT" }
 dependencies = [
     "PySide6>=6.6",
-    "kikit>=1.4",
     "shapely>=2.0",
     "qtawesome>=1.3",
 ]

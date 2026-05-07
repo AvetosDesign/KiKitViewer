@@ -2,7 +2,7 @@
   "$schema": "https://go.kicad.org/pcm/schemas/v1",
   "name": "KiKit Viewer",
   "description": "Visual KiKit panel editor — design and preview PCB panels from within pcbnew",
-  "description_full": "KiKit Viewer adds a toolbar button to pcbnew that opens a visual panel editor.\nAll KiKit panelization parameters (layout, tabs, framing, cuts) are exposed\nthrough a graphical interface with live preview. Requires KiKit >= 1.4 and a\nPython 3.11+ environment with PySide6, shapely, and qtawesome installed.",
+  "description_full": "KiKit Viewer adds a toolbar button to pcbnew that opens a visual panel editor.\nAll KiKit panelization parameters (layout, tabs, framing, cuts) are exposed\nthrough a graphical interface with live preview. Requires the KiKit PCM plugin\nand a Python 3.11+ environment with PySide6, shapely, and qtawesome installed.",
   "identifier": "com.avetosdesign.kikit-viewer",
   "type": "plugin",
   "author": {
@@ -15,10 +15,17 @@
   },
   "versions": [
     {
-      "version": "0.1.0",
-      "status": "testing",
+      "version": "1.0.0",
+      "status": "stable",
       "kicad_version": "8.0",
-      "platforms": ["Windows", "Linux", "macOS"]
+      "platforms": [
+        "Windows",
+        "Linux",
+        "macOS"
+      ],
+      "download_sha256": "1ac4e6a116d8dc70581fe79469c7176bc817a96df3b46ab0ac52ee67c610ad47",
+      "download_size": 96261,
+      "install_size": 232789
     }
   ]
 }
