@@ -2,10 +2,10 @@ from __future__ import annotations
 
 import math
 from pathlib import Path
-from typing import TYPE_CHECKING
 
-if TYPE_CHECKING:
-    from shapely.geometry import LinearRing
+from shapely.affinity import scale, translate
+from shapely.geometry import LinearRing, Point, Polygon
+from shapely.ops import nearest_points
 
 
 def load_outline(board_path: Path) -> LinearRing | None:
@@ -27,12 +27,6 @@ def load_outline(board_path: Path) -> LinearRing | None:
         return None
 
     try:
-        # KiCad provides a helper that returns the board outline as a
-        # Shapely polygon via the board's outline geometry.
-        # We use GetBoardPoly to get a SHAPE_POLY_SET if available,
-        # otherwise fall back to iterating Edge_Cuts drawings.
-        from shapely.geometry import LinearRing, Polygon
-
         # Attempt via KiKit's Substrate (most reliable).
         # substrate.substrates is a Shapely Polygon in KiCad internal units (nm).
         # Convert to mm by scaling, then center at origin.
@@ -47,8 +41,6 @@ def load_outline(board_path: Path) -> LinearRing | None:
                     # Using bbox centre (not centroid) matches how LayoutPanel
                     # computes scene_cx from the board's bounding-box half-width.
                     iu_per_mm = float(pcbnew.FromMM(1))
-                    from shapely.affinity import scale, translate
-
                     poly_mm = scale(
                         s.substrates, xfact=1 / iu_per_mm, yfact=1 / iu_per_mm, origin=(0, 0)
                     )
@@ -80,16 +72,11 @@ def load_outline(board_path: Path) -> LinearRing | None:
 
         if len(pts) >= 3:
             try:
-                ring = LinearRing(pts)
-                from shapely.affinity import translate
-                from shapely.geometry import Polygon
-
-                poly = Polygon(ring)
+                poly = Polygon(LinearRing(pts))
                 minx, miny, maxx, maxy = poly.bounds
                 bbox_cx = (minx + maxx) / 2.0
                 bbox_cy = (miny + maxy) / 2.0
-                centered = translate(poly, -bbox_cx, -bbox_cy)
-                return centered.exterior
+                return translate(poly, -bbox_cx, -bbox_cy).exterior
             except Exception:
                 pass
 
@@ -117,16 +104,13 @@ def project_to_outline(
     The outward normal is perpendicular to the local edge tangent and
     points away from the board interior.
     """
-    from shapely.geometry import Point
-    from shapely.ops import nearest_points
-
-    # The placement point
     p = Point(local_x_mm, local_y_mm)
 
     # Offset side is determined by whether the LinearRing is CW or CCW
     side = "right" if outline.is_ccw else "left"
 
-    # Create a snap line just outside the board outline
+    # Create a snap line just outside the board outline.  This ensures
+    # that the tab points don't end up inside the board outline.
     tabpointline = outline.parallel_offset(0.1, side)
 
     # Create an offset line to help us find the normal vector
@@ -138,14 +122,13 @@ def project_to_outline(
     # Find the normal vector's end point using the outset line
     p_end, _ = nearest_points(outsetline, p_snap)
 
-    # Calculate the angle from the snap point to the vector's end point
     nx, ny = p_end.x - p_snap.x, p_end.y - p_snap.y
     angle_deg = math.degrees(math.atan2(ny, nx))
 
     return p_snap.x, p_snap.y, angle_deg
 
 
-def outline_from_points(pts: list) -> "LinearRing | None":
+def outline_from_points(pts: list) -> LinearRing | None:
     """
     Reconstruct a LinearRing from a list of [x, y] pairs (as returned by the
     panel worker). Does not require pcbnew — only Shapely.
@@ -153,7 +136,6 @@ def outline_from_points(pts: list) -> "LinearRing | None":
     if not pts or len(pts) < 3:
         return None
     try:
-        from shapely.geometry import LinearRing
         return LinearRing(pts)
     except Exception:
         return None

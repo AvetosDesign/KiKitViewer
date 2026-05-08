@@ -9,7 +9,7 @@ from kikit_viewer.config.model import ConfigModel
 from kikit_viewer.runner.kikit_runner import KiKitRunner
 
 # Milliseconds to wait after the last config change before firing a run.
-_DEBOUNCE_MS = 600
+_DEBOUNCE_MS = 750
 
 
 class RunCoordinator(QObject):

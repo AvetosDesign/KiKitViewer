@@ -25,6 +25,7 @@ class PanelView(QGraphicsView):
     add_tab_requested = Signal(float, float)        # scene x_mm, y_mm — "Add Tab Here" context menu
     float_committed = Signal(float, float)          # scene x_mm, y_mm — left-click commits paste
     float_cancelled = Signal()                      # Escape or right-click cancels paste
+    rotate_requested = Signal(int)                  # degrees: +90=CCW, -90=CW
 
     def __init__(self, parent=None) -> None:
         super().__init__(parent)
@@ -166,6 +167,11 @@ class PanelView(QGraphicsView):
     def keyPressEvent(self, event) -> None:
         if self._float_mode and event.key() == Qt.Key.Key_Escape:
             self.float_cancelled.emit()
+            event.accept()
+            return
+        if event.key() == Qt.Key.Key_R:
+            degrees = -90 if event.modifiers() & Qt.KeyboardModifier.ShiftModifier else 90
+            self.rotate_requested.emit(degrees)
             event.accept()
             return
         if event.key() == Qt.Key.Key_Delete and self.scene():

@@ -24,6 +24,7 @@ from PySide6.QtWidgets import (
 from kikit_viewer.config import serialization, translation
 from kikit_viewer.config.model import ConfigModel
 from kikit_viewer.runner.run_coordinator import RunCoordinator
+from kikit_viewer.ui.canvas.board_overlay_item import BoardOverlayItem, BoardOverlayMode
 from kikit_viewer.ui.canvas.scene import PanelScene
 from kikit_viewer.ui.canvas.view import PanelView
 from kikit_viewer.ui.debug_dock import DebugGeometryDock
@@ -56,20 +57,6 @@ class _ToolButtonOverlay(QToolButton):
             painter.end()
 
 
-def _scene_to_board_local(
-    sx: float, sy: float,
-    cx: float, cy: float,
-    rot_deg: float,
-) -> tuple[float, float]:
-    """Convert a scene-coordinate point to board-local mm (before rotation)."""
-    rad = math.radians(rot_deg)  # KiCad CCW+ → inverse is CW on screen = std-math +rot_deg
-    dx, dy = sx - cx, sy - cy
-    return (
-        dx * math.cos(rad) - dy * math.sin(rad),
-        dx * math.sin(rad) + dy * math.cos(rad),
-    )
-
-
 class MainWindow(QMainWindow):
     """
     Top-level application window.
@@ -96,12 +83,11 @@ class MainWindow(QMainWindow):
         self._model.config_changed.connect(self._on_config_changed)
         self._model.undo_state_changed.connect(self._on_undo_state_changed)
 
-        # Tab placement state — updated each time a board is highlighted
-        self._last_highlight_cx: float = 0.0
-        self._last_highlight_cy: float = 0.0
-        self._last_highlight_rot: float = 0.0
-        self._board_outline = None  # Shapely LinearRing, cached per board path
+        # Board outline — cached from run result, distributed to overlay items.
+        self._board_outline = None  # Shapely LinearRing, same shape for all boards
         self._model.board_path_changed.connect(lambda _: self._clear_board_outline())
+        # Per-board overlay items (board_id → BoardOverlayItem); cleared on each run.
+        self._overlay_items: dict[int, BoardOverlayItem] = {}
         self._hover_board_idx: int | None = None
 
         # Clipboard + float-mode state for copy/paste
@@ -162,34 +148,29 @@ class MainWindow(QMainWindow):
         self._scene.layers_loaded.connect(self._layers_panel.populate)
         self._scene.panel_size_changed.connect(self._on_panel_size_changed)
 
-        # Multi-board overlay path (manual layout mode)
+        # Board overlay path
         self._layout_panel.boards_highlighted.connect(self._on_boards_highlighted)
-        self._layout_panel.board_deselected.connect(self._scene.clear_board_highlight)
-        self._scene.boards_positions_updated.connect(self._layout_panel.apply_multi_board_drop)
+        self._layout_panel.board_deselected.connect(self._on_board_deselected)
+        self._scene.boards_positions_updated.connect(self._layout_panel.apply_board_drop)
         # Legacy single-board path (grid mode → tabs panel)
         self._layout_panel.board_highlighted.connect(self._on_board_highlighted)
-        self._scene.board_position_updated.connect(self._layout_panel.apply_board_drop)
 
         self._view.refresh_requested.connect(self._refresh_now)
 
-        self._scene.tab_placement_requested.connect(self._on_tab_placement_requested)
-        self._scene.tab_marker_moved.connect(self._on_tab_marker_moved)
-        self._scene.tab_marker_delete_requested.connect(self._on_tab_marker_delete_requested)
-
         self._tabs_panel.tab_selected.connect(self._scene.select_tab_marker)
-        self._tabs_panel.tab_delete_requested.connect(self._on_tab_marker_delete_requested)
+        self._tabs_panel.tab_delete_requested.connect(self._on_tab_delete_from_panel)
         self._tabs_panel.tab_list_hovered.connect(self._scene.select_tab_marker)
-        self._scene.tab_marker_hovered.connect(self._on_tab_marker_hovered)
         self._layout_panel.board_hovered.connect(self._on_board_table_hovered)
         self._layout_panel.board_hover_cleared.connect(self._on_board_hover_cleared)
 
         self._param_tabs.currentChanged.connect(self._on_param_tab_changed)
         self._model.config_changed.connect(self._sync_tab_mode)
-        self._view.add_tab_requested.connect(self._on_tab_placement_requested)
+        self._view.add_tab_requested.connect(self._on_add_tab_at_scene)
 
         # Float mode (paste) signals
         self._view.float_committed.connect(self._on_float_committed)
         self._view.float_cancelled.connect(self._on_float_cancelled)
+        self._view.rotate_requested.connect(self._on_rotate_requested)
 
         self._build_menu()
         self._build_toolbar()
@@ -213,18 +194,18 @@ class MainWindow(QMainWindow):
         self._param_tabs = QTabWidget()
         tabs = self._param_tabs
         self._layout_panel = LayoutPanel(self._model)
-        self._tabs_panel   = TabsPanel(self._model)
+        self._tabs_panel = TabsPanel(self._model)
         tabs.addTab(self._layout_panel, "Layout")
         tabs.addTab(FramingPanel(self._model), "Framing")
-        tabs.addTab(self._tabs_panel,    "Tabs")
-        tabs.addTab(CutsPanel(self._model),    "Cuts")
-        tabs.addTab(TextPanel(self._model),    "Text")
-        tabs.addTab(PostPanel(self._model),    "Post")
+        tabs.addTab(self._tabs_panel, "Tabs")
+        tabs.addTab(CutsPanel(self._model), "Cuts")
+        tabs.addTab(TextPanel(self._model), "Text")
+        tabs.addTab(PostPanel(self._model), "Post")
         self._TABS_TAB_INDEX = 2
 
         # Auto Refresh toggle
         self._auto_refresh_btn = _ToolButtonOverlay()
-        self._auto_refresh_btn.setIcon(qta.icon('mdi6.refresh-auto'))
+        self._auto_refresh_btn.setIcon(qta.icon("mdi6.refresh-auto"))
         self._auto_refresh_btn.setIconSize(QSize(32, 32))
         self._auto_refresh_btn.setFixedSize(QSize(36, 36))
         self._auto_refresh_btn.setCheckable(True)
@@ -237,14 +218,12 @@ class MainWindow(QMainWindow):
 
         # Auto fit (zoom to fit)
         self._auto_fit_btn = _ToolButtonOverlay()
-        self._auto_fit_btn.setIcon(qta.icon('mdi6.fit-to-page-outline'))
+        self._auto_fit_btn.setIcon(qta.icon("mdi6.fit-to-page-outline"))
         self._auto_fit_btn.setIconSize(QSize(32, 32))
         self._auto_fit_btn.setFixedSize(QSize(36, 36))
         self._auto_fit_btn.setCheckable(True)
         self._auto_fit_btn.setChecked(True)
-        self._auto_fit_btn.setToolTip(
-            "Auto Fit — automatically zooms to fit on each refresh"
-        )
+        self._auto_fit_btn.setToolTip("Auto Fit — automatically zooms to fit on each refresh")
         self._auto_fit_btn.setStyleSheet("QToolButton { border: none; padding: 2px; }")
         self._auto_fit_btn.toggled.connect(self._on_auto_fit_toggled)
 
@@ -275,13 +254,13 @@ class MainWindow(QMainWindow):
 
         # File menu
         file_menu = bar.addMenu("&File")
-        _new_act = _QAction(qta.icon('mdi6.folder-plus-outline'), "&New Config", self)
+        _new_act = _QAction(qta.icon("mdi6.folder-plus-outline"), "&New Config", self)
         _new_act.setShortcut(_QKS("Ctrl+N"))
         _new_act.triggered.connect(self._new_config)
         file_menu.addAction(_new_act)
 
         file_menu.addSeparator()
-        _open_act = _QAction(qta.icon('mdi6.folder-open-outline'), "&Open Config…", self)
+        _open_act = _QAction(qta.icon("mdi6.folder-open-outline"), "&Open Config…", self)
         _open_act.setShortcut(_QKS("Ctrl+O"))
         _open_act.triggered.connect(self._open_config)
         file_menu.addAction(_open_act)
@@ -289,14 +268,14 @@ class MainWindow(QMainWindow):
         self._rebuild_recent_menu()
 
         file_menu.addSeparator()
-        self._save_action = _QAction(qta.icon('mdi6.content-save'), "&Save Config", self)
+        self._save_action = _QAction(qta.icon("mdi6.content-save"), "&Save Config", self)
         self._save_action.setShortcut(_QKS("Ctrl+S"))
         self._save_action.triggered.connect(self._save_config)
         file_menu.addAction(self._save_action)
         file_menu.addAction("Save Config &As…", self._save_config_as, "Ctrl+Shift+S")
 
         file_menu.addSeparator()
-        self._export_action = _QAction(qta.icon('mdi6.file-export'), "&Export Panel…", self)
+        self._export_action = _QAction(qta.icon("mdi6.file-export"), "&Export Panel…", self)
         self._export_action.setShortcut(_QKS("Ctrl+E"))
         self._export_action.triggered.connect(self._export_panel)
         file_menu.addAction(self._export_action)
@@ -306,48 +285,48 @@ class MainWindow(QMainWindow):
 
         # Edit menu
         edit_menu = bar.addMenu("&Edit")
-        self._undo_action = _QAction(qta.icon('mdi6.undo'), "&Undo", self)
+        self._undo_action = _QAction(qta.icon("mdi6.undo"), "&Undo", self)
         self._undo_action.setShortcut(_QKS.StandardKey.Undo)
         self._undo_action.setEnabled(False)
         self._undo_action.triggered.connect(self._model.undo)
         edit_menu.addAction(self._undo_action)
 
-        self._redo_action = _QAction(qta.icon('mdi6.redo'), "&Redo", self)
+        self._redo_action = _QAction(qta.icon("mdi6.redo"), "&Redo", self)
         self._redo_action.setShortcut(_QKS.StandardKey.Redo)
         self._redo_action.setEnabled(False)
         self._redo_action.triggered.connect(self._model.redo)
         edit_menu.addAction(self._redo_action)
 
         edit_menu.addSeparator()
-        self._copy_action = _QAction(qta.icon('mdi6.content-copy'), "&Copy Board(s)", self)
+        self._copy_action = _QAction(qta.icon("mdi6.content-copy"), "&Copy Board(s)", self)
         self._copy_action.setShortcut(_QKS.StandardKey.Copy)
         self._copy_action.triggered.connect(self._on_copy_boards)
         edit_menu.addAction(self._copy_action)
 
-        self._paste_action = _QAction(qta.icon('mdi6.content-paste'), "&Paste Board(s)", self)
+        self._paste_action = _QAction(qta.icon("mdi6.content-paste"), "&Paste Board(s)", self)
         self._paste_action.setShortcut(_QKS.StandardKey.Paste)
         self._paste_action.triggered.connect(self._on_paste_boards)
         edit_menu.addAction(self._paste_action)
 
         # View menu
         view_menu = bar.addMenu("&View")
-        self._refresh_action = _QAction(qta.icon('mdi6.refresh'), "&Refresh", self)
+        self._refresh_action = _QAction(qta.icon("mdi6.refresh"), "&Refresh", self)
         self._refresh_action.setShortcut(_QKS.StandardKey.Refresh)
         self._refresh_action.triggered.connect(self._refresh_now)
         view_menu.addAction(self._refresh_action)
 
         view_menu.addSeparator()
-        self._zoomin_action = _QAction(qta.icon('mdi6.magnify-plus-outline'), "Zoom &In", self)
+        self._zoomin_action = _QAction(qta.icon("mdi6.magnify-plus-outline"), "Zoom &In", self)
         self._zoomin_action.setShortcut(_QKS.StandardKey.ZoomIn)
         self._zoomin_action.triggered.connect(self._view.zoom_in)
         view_menu.addAction(self._zoomin_action)
 
-        self._zoomout_action = _QAction(qta.icon('mdi6.magnify-minus-outline'), "Zoom &Out", self)
+        self._zoomout_action = _QAction(qta.icon("mdi6.magnify-minus-outline"), "Zoom &Out", self)
         self._zoomout_action.setShortcut(_QKS.StandardKey.ZoomOut)
         self._zoomout_action.triggered.connect(self._view.zoom_out)
         view_menu.addAction(self._zoomout_action)
 
-        self._fitview_action = _QAction(qta.icon('mdi6.magnify-expand'), "Zoom to &Fit", self)
+        self._fitview_action = _QAction(qta.icon("mdi6.magnify-expand"), "Zoom to &Fit", self)
         self._fitview_action.setShortcut(Qt.CTRL | Qt.Key_0)
         self._fitview_action.triggered.connect(self._view.fit_panel)
         view_menu.addAction(self._fitview_action)
@@ -355,6 +334,10 @@ class MainWindow(QMainWindow):
         view_menu.addSeparator()
         view_menu.addAction(self._layers_dock.toggleViewAction())
         view_menu.addAction(self._debug_dock.toggleViewAction())
+
+        # Help menu
+        help_menu = bar.addMenu("&Help")
+        help_menu.addAction("&About KiKit Viewer…", self._show_about)
 
         QShortcut(QKeySequence(Qt.Key.Key_Home), self, self._view.fit_panel)
 
@@ -395,7 +378,7 @@ class MainWindow(QMainWindow):
     def _add_recent(self, path: Path) -> None:
         s = QSettings(_SETTINGS_ORG, _SETTINGS_APP)
         existing = [p for p in (s.value("recentFiles", []) or []) if p != str(path)]
-        s.setValue("recentFiles", [str(path)] + existing[:_MAX_RECENT - 1])
+        s.setValue("recentFiles", [str(path)] + existing[: _MAX_RECENT - 1])
         self._rebuild_recent_menu()
 
     def _rebuild_recent_menu(self) -> None:
@@ -493,6 +476,18 @@ class MainWindow(QMainWindow):
         self._cursor_label.clear()
         self._on_board_hover_cleared()
 
+    def _on_overlay_tapped(self, board_id: int, modifiers) -> None:
+        """Clean click (no drag) on a board overlay in Layout mode — update table selection."""
+        if modifiers and (modifiers & Qt.KeyboardModifier.ControlModifier):
+            current = set(self._layout_panel.selected_rows)
+            if board_id in current:
+                current.discard(board_id)
+            else:
+                current.add(board_id)
+            self._layout_panel.set_selected_rows(sorted(current))
+        else:
+            self._layout_panel.select_row(board_id)
+
     def _on_canvas_clicked(self, x: float, y: float, modifiers=None) -> None:
         """Left-click on non-interactive canvas area — select or Ctrl+click to toggle."""
         for row in range(self._layout_panel.board_count):
@@ -502,7 +497,7 @@ class MainWindow(QMainWindow):
             cx, cy, w, h, rot, _ = data
             rad = math.radians(rot)
             dx, dy = x - cx, y - cy
-            lx =  dx * math.cos(rad) + dy * math.sin(rad)
+            lx = dx * math.cos(rad) + dy * math.sin(rad)
             ly = -dx * math.sin(rad) + dy * math.cos(rad)
             if abs(lx) <= w / 2 and abs(ly) <= h / 2:
                 if modifiers and (modifiers & Qt.KeyboardModifier.ControlModifier):
@@ -515,6 +510,9 @@ class MainWindow(QMainWindow):
                 else:
                     self._layout_panel.select_row(row)
                 return
+        # Click landed on empty canvas — deselect all in manual mode
+        if self._model.get("layout", "type") == "manual" and self._layout_panel.selected_rows:
+            self._layout_panel.set_selected_rows([])
 
     def _on_board_table_hovered(self, row: int) -> None:
         self._update_hover(row)
@@ -549,7 +547,7 @@ class MainWindow(QMainWindow):
             cx, cy, w, h, rot, _ = data
             rad = math.radians(rot)
             dx, dy = x - cx, y - cy
-            lx =  dx * math.cos(rad) + dy * math.sin(rad)
+            lx = dx * math.cos(rad) + dy * math.sin(rad)
             ly = -dx * math.sin(rad) + dy * math.cos(rad)
             if abs(lx) <= w / 2 and abs(ly) <= h / 2:
                 hit = row
@@ -558,13 +556,30 @@ class MainWindow(QMainWindow):
 
     def _set_status(self, message: str, error: bool = False) -> None:
         self._status.showMessage(message)
-        self._status.setStyleSheet(
-            "QStatusBar { color: #e05555; }" if error else ""
-        )
+        self._status.setStyleSheet("QStatusBar { color: #e05555; }" if error else "")
 
     # ------------------------------------------------------------------
     # Menu actions
     # ------------------------------------------------------------------
+
+    def _show_about(self) -> None:
+        from importlib.metadata import PackageNotFoundError, version as pkg_version
+
+        try:
+            ver = pkg_version("kikit-viewer")
+        except PackageNotFoundError:
+            ver = "unknown"
+
+        box = QMessageBox(self)
+        box.setWindowTitle("About KiKit Viewer")
+        box.setTextFormat(Qt.TextFormat.RichText)
+        box.setText(
+            f"<b>KiKit Viewer</b> v{ver}<br><br>"
+            f'<a href="https://github.com/AvetosDesign/KiKitViewer">'
+            f"github.com/AvetosDesign/KiKitViewer</a>"
+        )
+        box.setTextInteractionFlags(Qt.TextInteractionFlag.TextBrowserInteraction)
+        box.exec()
 
     def _new_config(self) -> None:
         if not self._prompt_save_if_dirty():
@@ -578,9 +593,12 @@ class MainWindow(QMainWindow):
         if not self._prompt_save_if_dirty():
             return
         from PySide6.QtWidgets import QFileDialog
+
         path, _ = QFileDialog.getOpenFileName(
-            self, "Open Panel Config", "",
-            "KiKit panel (*.kicad_panel);;KiKit config (*.kikit.json);;All files (*)"
+            self,
+            "Open Panel Config",
+            "",
+            "KiKit panel (*.kicad_panel);;KiKit config (*.kikit.json);;All files (*)",
         )
         if path:
             self._open_config_path(Path(path))
@@ -591,6 +609,7 @@ class MainWindow(QMainWindow):
             meta = translation.viewer_meta(raw)
             self._scene.clear_panel()
             self._model.load_dict(raw)  # load_dict ignores unknown sections
+
             # Restore layer visibility; takes effect on the next render
             for name, visible in meta.get("layers", {}).items():
                 self._scene.set_layer_visible(name, bool(visible))
@@ -608,10 +627,13 @@ class MainWindow(QMainWindow):
 
     def _save_config_as(self) -> None:
         from PySide6.QtWidgets import QFileDialog
+
         default = str(self._model.default_config_path() or "panel.kicad_panel")
         path, _ = QFileDialog.getSaveFileName(
-            self, "Save Panel Config", default,
-            "KiKit panel (*.kicad_panel);;KiKit config (*.kikit.json);;All files (*)"
+            self,
+            "Save Panel Config",
+            default,
+            "KiKit panel (*.kicad_panel);;KiKit config (*.kikit.json);;All files (*)",
         )
         if path:
             self._write_config(Path(path))
@@ -633,16 +655,16 @@ class MainWindow(QMainWindow):
 
         if self._last_preview is None or not self._last_preview.exists():
             QMessageBox.warning(
-                self, "Nothing to export",
+                self,
+                "Nothing to export",
                 "No panel has been generated yet. "
-                "Make sure a board is loaded and the panel preview is showing."
+                "Make sure a board is loaded and the panel preview is showing.",
             )
             return
 
         default = str(self._model.default_panel_path() or "panel.kicad_pcb")
         path, _ = QFileDialog.getSaveFileName(
-            self, "Export Panel PCB", default,
-            "KiCad PCB (*.kicad_pcb);;All files (*)"
+            self, "Export Panel PCB", default, "KiCad PCB (*.kicad_pcb);;All files (*)"
         )
         if not path:
             return
@@ -665,8 +687,7 @@ class MainWindow(QMainWindow):
             return
         positions = self._model.get("layout", "positions") or []
         self._board_clipboard = [
-            dict(positions[row]) for row in self._layout_panel.selected_rows
-            if row < len(positions)
+            dict(positions[row]) for row in self._layout_panel.selected_rows if row < len(positions)
         ]
 
     def _on_paste_boards(self) -> None:
@@ -709,11 +730,13 @@ class MainWindow(QMainWindow):
         positions = list(self._model.get("layout", "positions") or [])
         new_rows_start = len(positions)
         for scene_cx, scene_cy, rot in finals:
-            positions.append({
-                "x": round(scene_cx + ox, 3),
-                "y": round(scene_cy + oy, 3),
-                "rotation": round(rot, 3),
-            })
+            positions.append(
+                {
+                    "x": round(scene_cx + ox, 3),
+                    "y": round(scene_cy + oy, 3),
+                    "rotation": round(rot, 3),
+                }
+            )
         self._cleanup_float()
         self._model.set("layout", "positions", positions)
         new_rows = list(range(new_rows_start, len(positions)))
@@ -727,59 +750,122 @@ class MainWindow(QMainWindow):
         self._view.exit_float_mode()
         self._float_mode = False
 
+    def _on_rotate_requested(self, degrees: int) -> None:
+        if self._model.get("layout", "type") != "manual":
+            return
+        if self._float_mode:
+            self._scene.rotate_float_overlays(degrees)
+        else:
+            self._scene.rotate_board_overlays(degrees)
+
     # ------------------------------------------------------------------
     # Run coordinator slots
     # ------------------------------------------------------------------
 
+    def _on_board_deselected(self) -> None:
+        self._scene.clear_overlays()
+        self._overlay_items.clear()
+
+    def _is_tab_mode(self) -> bool:
+        try:
+            return (
+                self._param_tabs.currentIndex() == self._TABS_TAB_INDEX
+                and self._model.get("tabs", "type") == "manual"
+            )
+        except KeyError:
+            return False
+
+    # Sync BoardOverlayItem instances to the current overlay list
     def _on_boards_highlighted(self, overlays: list) -> None:
-        """Handle multi-board overlay updates for the manual layout mode.
-
-        When the Tabs tab is active in manual-tabs mode, delegates to the single-board
-        highlight path (which adds tab markers). Otherwise, calls set_board_overlays()
-        so all boards are visible with selected ones highlighted.
         """
-        on_tabs_tab = self._param_tabs.currentIndex() == self._TABS_TAB_INDEX
-        try:
-            is_manual_tabs = self._model.get("tabs", "type") == "manual"
-        except KeyError:
-            is_manual_tabs = False
+        Reuses existing items where board_id matches (update in-place); creates new
+        ones; removes stale ones. This keeps items alive across model changes, which
+        is what eliminates the tab highlight disappearance bug.
+        """
+        if not overlays:
+            self._on_board_deselected()
+            return
 
-        if on_tabs_tab and is_manual_tabs:
-            # Show single board with tab markers
-            selected = [o for o in overlays if o[7]]  # is_selected at index 7
+        tab_mode = self._is_tab_mode()
+        try:
+            tab_positions = list(self._model.get("tabs", "positions") or [])
+        except KeyError:
+            tab_positions = []
+
+        # In tab mode, only show the first selected board (with tab markers).
+        if tab_mode:
+            selected = [o for o in overlays if o[7]]
             if not selected:
-                self._scene.clear_board_highlight()
+                self._on_board_deselected()
                 return
-            row, cx, cy, w, h, rot, svg, _ = selected[0]
-            self._last_highlight_cx = cx
-            self._last_highlight_cy = cy
-            self._last_highlight_rot = rot
-            try:
-                tab_positions = list(self._model.get("tabs", "positions") or [])
-            except KeyError:
-                tab_positions = []
-            self._scene.highlight_board(cx, cy, w, h, rot, svg, tab_positions=tab_positions)
-        else:
-            if not overlays:
-                self._scene.clear_board_highlight()
-                return
-            self._scene.set_board_overlays(overlays)
+            overlays = selected[:1]
 
-    def _on_board_highlighted(self, svg: str, x: float, y: float, w: float, h: float, rot: float) -> None:
-        """Handle single-board highlight (grid mode → tabs panel path only)."""
-        self._last_highlight_cx = x
-        self._last_highlight_cy = y
-        self._last_highlight_rot = rot
+        current_ids = {o[0] for o in overlays}
 
-        tab_positions: list[dict] | None = None
+        # Remove stale items
+        for bid in list(self._overlay_items):
+            if bid not in current_ids:
+                self._scene.remove_overlay(bid)
+                del self._overlay_items[bid]
+
+        # Create new / update existing
+        mode = BoardOverlayMode.Tab if tab_mode else BoardOverlayMode.Layout
+        for row, cx, cy, w, h, rot, svg, is_selected in overlays:
+            color = "#ffffff" if is_selected else "#aaaaaa"
+            opacity = 0.9 if is_selected else 0.35
+            z_val = 150 if is_selected else 145
+            if row not in self._overlay_items:
+                item = BoardOverlayItem(row, self._board_outline, w, h, cx, cy, rot, svg, color)
+                item.position_changed.connect(self._scene._on_overlay_position_changed)
+                item.overlay_tapped.connect(self._on_overlay_tapped)
+                item.tapped.connect(self._on_tab_tapped)
+                item.tab_moved.connect(self._on_tab_moved)
+                item.tab_deleted.connect(self._on_tab_deleted)
+                item.tab_hovered.connect(self._on_tab_marker_hovered)
+                self._scene.add_overlay(item)
+                self._overlay_items[row] = item
+            else:
+                item = self._overlay_items[row]
+                item.update_geometry(cx, cy, rot, outline=self._board_outline, svg=svg, color=color)
+            item.mode = mode
+            item.setOpacity(opacity)
+            item.setZValue(z_val)
+            if is_selected:
+                item.setSelected(True)
+            if tab_mode and is_selected:
+                item.set_tabs(tab_positions)
+
+    # Handle single-board highlight (grid mode → tabs panel path only)
+    def _on_board_highlighted(
+        self, svg: str, x: float, y: float, w: float, h: float, rot: float
+    ) -> None:
+        board_id = 0  # single-board path always uses id 0
+        tab_mode = self._is_tab_mode()
         try:
-            on_tabs_tab = self._param_tabs.currentIndex() == self._TABS_TAB_INDEX
-            if on_tabs_tab and self._model.get("tabs", "type") == "manual":
-                tab_positions = list(self._model.get("tabs", "positions") or [])
+            tab_positions = list(self._model.get("tabs", "positions") or []) if tab_mode else []
         except KeyError:
-            pass
+            tab_positions = []
 
-        self._scene.highlight_board(x, y, w, h, rot, svg, tab_positions=tab_positions)
+        if board_id not in self._overlay_items:
+            item = BoardOverlayItem(board_id, self._board_outline, w, h, x, y, rot, svg)
+            item.position_changed.connect(
+                lambda _bid, cx, cy: self._layout_panel.apply_board_drop({_bid: (cx, cy)})
+            )
+            item.overlay_tapped.connect(self._on_overlay_tapped)
+            item.tapped.connect(self._on_tab_tapped)
+            item.tab_moved.connect(self._on_tab_moved)
+            item.tab_deleted.connect(self._on_tab_deleted)
+            item.tab_hovered.connect(self._on_tab_marker_hovered)
+            self._scene.add_overlay(item)
+            self._overlay_items[board_id] = item
+        else:
+            item = self._overlay_items[board_id]
+            item.update_geometry(x, y, rot, outline=self._board_outline, svg=svg, color="#ffffff")
+
+        mode = BoardOverlayMode.Tab if tab_mode else BoardOverlayMode.Layout
+        item.mode = mode
+        if tab_mode:
+            item.set_tabs(tab_positions)
 
     def _on_run_started(self) -> None:
         self._set_status("Running KiKit…")
@@ -795,7 +881,11 @@ class MainWindow(QMainWindow):
             self._layout_panel.set_board_geometry(board_w, board_h, board_svg)
         if outline_pts:
             from kikit_viewer.geometry.board_outline import outline_from_points
+
             self._board_outline = outline_from_points(outline_pts)
+
+        # load_panel clears the scene (including all overlay items); reset our dict.
+        self._overlay_items.clear()
         self._scene.load_panel(panel_path, self._model.as_dict(), svgs=svgs)
         if self._auto_fit_btn.isChecked():
             self._view.fit_panel()
@@ -807,6 +897,7 @@ class MainWindow(QMainWindow):
     def _update_debug_dock(self) -> None:
         try:
             from kikit_viewer.plugins import manual_tabs
+
             dbg = dict(manual_tabs._last_debug_geometries)
         except Exception:
             return
@@ -826,6 +917,7 @@ class MainWindow(QMainWindow):
 
     def _on_fiducials_reset(self) -> None:
         from kikit_viewer.config.schema import FIDUCIALS_FIELDS
+
         defaults = {f.key: f.default for f in FIDUCIALS_FIELDS}
         self._model.set("fiducials", "hoffset", defaults["hoffset"])
         self._model.set("fiducials", "voffset", defaults["voffset"])
@@ -839,88 +931,83 @@ class MainWindow(QMainWindow):
 
     def _on_tooling_reset(self) -> None:
         from kikit_viewer.config.schema import TOOLING_FIELDS
+
         defaults = {f.key: f.default for f in TOOLING_FIELDS}
         self._model.set("tooling", "hoffset", defaults["hoffset"])
         self._model.set("tooling", "voffset", defaults["voffset"])
 
     # ------------------------------------------------------------------
-    # Tab placement slots
+    # Tab handling slots
     # ------------------------------------------------------------------
 
     def _clear_board_outline(self) -> None:
         self._board_outline = None
 
-    def _ensure_board_outline(self) -> None:
-        # Outline is populated from the panel worker result in _on_run_finished.
-        # Fallback: try load_outline directly (works when pcbnew is available,
-        # e.g. running inside KiCad's Python for testing).
-        if self._board_outline is not None:
-            return
-        board_path = self._model.board_path
-        if board_path is None:
-            return
-        try:
-            from kikit_viewer.geometry.board_outline import load_outline
-            self._board_outline = load_outline(board_path)
-        except Exception:
-            pass
+    # Return the active Tab-mode overlay item, or None
+    def _tab_overlay_item(self) -> BoardOverlayItem | None:
+        for item in self._overlay_items.values():
+            if item.mode == BoardOverlayMode.Tab:
+                return item
+        return None
 
-    def _on_tab_placement_requested(self, scene_x: float, scene_y: float) -> None:
-        self._ensure_board_outline()
-        local_x, local_y = _scene_to_board_local(
-            scene_x, scene_y,
-            self._last_highlight_cx, self._last_highlight_cy, self._last_highlight_rot,
-        )
-        if self._board_outline is not None:
-            try:
-                from kikit_viewer.geometry.board_outline import project_to_outline
-                snapped_x, snapped_y, angle_deg = project_to_outline(
-                    self._board_outline, local_x, local_y
-                )
-            except Exception:
-                snapped_x, snapped_y, angle_deg = local_x, local_y, 0.0
-        else:
-            snapped_x, snapped_y, angle_deg = local_x, local_y, 0.0
+    # Handle right-click 'Add Tab Here' — scene coords delivered by PanelView
+    def _on_add_tab_at_scene(self, scene_x: float, scene_y: float) -> None:
+        item = self._tab_overlay_item()
+        if item is not None:
+            item.handle_scene_tap(scene_x, scene_y)
 
+    # Tab placed by clicking the board highlight — coords already snapped by the item
+    def _on_tab_tapped(
+        self, board_id: int, local_x: float, local_y: float, angle_deg: float
+    ) -> None:
         positions = list(self._model.get("tabs", "positions") or [])
-        positions.append({
-            "x": round(snapped_x, 3),
-            "y": round(snapped_y, 3),
-            "a": round(angle_deg, 2),
-        })
-        self._model.set("tabs", "positions", positions)
-
-    def _on_tab_marker_moved(self, idx: int, scene_x: float, scene_y: float) -> None:
-        self._ensure_board_outline()
-        local_x, local_y = _scene_to_board_local(
-            scene_x, scene_y,
-            self._last_highlight_cx, self._last_highlight_cy, self._last_highlight_rot,
+        positions.append(
+            {
+                "x": round(local_x, 3),
+                "y": round(local_y, 3),
+                "a": round(angle_deg, 2),
+            }
         )
-        if self._board_outline is not None:
-            try:
-                from kikit_viewer.geometry.board_outline import project_to_outline
-                snapped_x, snapped_y, angle_deg = project_to_outline(
-                    self._board_outline, local_x, local_y
-                )
-            except Exception:
-                snapped_x, snapped_y, angle_deg = local_x, local_y, 0.0
-        else:
-            snapped_x, snapped_y, angle_deg = local_x, local_y, 0.0
+        self._model.set("tabs", "positions", positions)
+        item = self._overlay_items.get(board_id)
+        if item is not None:
+            item.set_tabs(positions)
 
+    # Tab marker dragged — coords already snapped by the item
+    def _on_tab_moved(
+        self, board_id: int, idx: int, local_x: float, local_y: float, angle_deg: float
+    ) -> None:
         positions = list(self._model.get("tabs", "positions") or [])
         if 0 <= idx < len(positions):
             positions[idx] = {
-                "x": round(snapped_x, 3),
-                "y": round(snapped_y, 3),
+                "x": round(local_x, 3),
+                "y": round(local_y, 3),
                 "a": round(angle_deg, 2),
             }
             self._model.set("tabs", "positions", positions)
+            item = self._overlay_items.get(board_id)
+            if item is not None:
+                item.set_tabs(positions)
 
-    def _on_tab_marker_delete_requested(self, idx: int) -> None:
+    # Tab marker deleted via the canvas
+    def _on_tab_deleted(self, board_id: int, idx: int) -> None:
+        self._delete_tab_at(idx, board_id)
+
+    # Tab deleted via the Tabs panel UI
+    def _on_tab_delete_from_panel(self, idx: int) -> None:
+        self._delete_tab_at(idx, board_id=None)
+
+    def _delete_tab_at(self, idx: int, board_id: int | None) -> None:
         positions = list(self._model.get("tabs", "positions") or [])
         if 0 <= idx < len(positions):
             positions.pop(idx)
             self._model.set("tabs", "positions", positions)
+            if board_id is None:
+                item = self._tab_overlay_item()
+            else:
+                item = self._overlay_items.get(board_id)
+            if item is not None:
+                item.set_tabs(positions)
 
     def _maybe_highlight_first_board_for_tabs(self) -> None:
         try:
@@ -937,12 +1024,16 @@ class MainWindow(QMainWindow):
         except Exception:
             self._view.set_manual_tab_mode(False)
 
+    # Refresh board overlays whenever the user switches parameter tabs so the
+    # mode (Layout vs Tab) and tab markers stay in sync with the active tab.
     def _on_param_tab_changed(self, _index: int) -> None:
-        # Refresh the board highlight whenever the user switches parameter tabs so
-        # that the mode (drag vs tap-to-place-tab) matches the active tab.
         self._layout_panel.restore_highlight()
         self._maybe_highlight_first_board_for_tabs()
         self._sync_tab_mode()
+
+    # ------------------------------------------------------------------
+    # Other slots
+    # ------------------------------------------------------------------
 
     def _on_auto_refresh_toggled(self, checked: bool) -> None:
         self._coordinator.auto_refresh = checked

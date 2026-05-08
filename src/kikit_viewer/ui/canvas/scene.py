@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import math
 import re
 from pathlib import Path
 from typing import Any
@@ -12,6 +13,7 @@ from PySide6.QtWidgets import QGraphicsItem, QGraphicsObject, QGraphicsScene
 
 from kikit_viewer.renderer.color_theme import load_layer_colors
 from kikit_viewer.renderer.pcbnew_renderer import PcbnewSvgRenderer
+from kikit_viewer.ui.canvas.board_overlay_item import BoardOverlayItem
 from kikit_viewer.ui.canvas.fiducial_handle_item import (
     FiducialHandleItem,
 )
@@ -24,41 +26,25 @@ from kikit_viewer.ui.canvas.tooling_handle_item import (
 from kikit_viewer.ui.canvas.tooling_handle_item import (
     corners_for_type as tooling_corners_for_type,
 )
-from kikit_viewer.ui.canvas.tab_marker_item import TabMarkerItem
 
 # Qt 6 SVG renderer assumes 96 DPI; 1 px = this many mm
 _MM_PER_PX = 25.4 / 96.0
 
 
-class _BoardHighlightItem(QGraphicsObject):
-    """
-    Draggable board outline container for the table-layout highlight overlay.
+class _HoverItem(QGraphicsObject):
+    """Dim, non-interactive board outline preview for hover highlighting."""
 
-    The actual outline is rendered by a child QGraphicsSvgItem (or, when no SVG
-    is available, painted directly as a dashed rectangle).  This parent item
-    carries ItemIsMovable so the user can drag the outline to a new position;
-    releasing the mouse after a genuine drag emits released(row, scene_cx, scene_cy).
-    The emission is deferred via QTimer so the scene can safely replace this item
-    from within the connected slot without re-entering the mouse-event stack.
-    """
-
-    released = Signal(int, float, float)  # row, new scene_cx, scene_cy after drag
-    tapped   = Signal(float, float)        # scene position of a click (no drag)
-
-    def __init__(self, row: int, w_mm: float, h_mm: float,
-                 opacity: float = 0.9, color: str = "#ffffff") -> None:
+    def __init__(self, w_mm: float, h_mm: float, color: str = "#ffffff") -> None:
         super().__init__()
-        self._row = row
         self._w = w_mm
         self._h = h_mm
         self._color = color
         self._fallback = False
-        self._drag_start = None
-        self.setFlag(QGraphicsItem.GraphicsItemFlag.ItemIsMovable)
-        self.setFlag(QGraphicsItem.GraphicsItemFlag.ItemIsSelectable)
-        self.setCursor(Qt.CursorShape.SizeAllCursor)
-        self.setZValue(150)
-        self.setOpacity(opacity)
+        self.setFlag(QGraphicsItem.GraphicsItemFlag.ItemIsMovable, False)
+        self.setFlag(QGraphicsItem.GraphicsItemFlag.ItemIsSelectable, False)
+        self.setZValue(140)
+        self.setOpacity(0.4)
+        self.setCursor(Qt.CursorShape.ArrowCursor)
 
     def enable_fallback_rect(self) -> None:
         self._fallback = True
@@ -78,21 +64,6 @@ class _BoardHighlightItem(QGraphicsObject):
         painter.setBrush(Qt.BrushStyle.NoBrush)
         painter.drawRect(self.boundingRect())
 
-    def mousePressEvent(self, event) -> None:
-        super().mousePressEvent(event)
-        event.accept()  # ensure release is delivered even without ItemIsMovable
-        self._drag_start = self.pos()
-
-    def mouseReleaseEvent(self, event) -> None:
-        super().mouseReleaseEvent(event)
-        p = self.pos()
-        row = self._row
-        if self._drag_start is not None and p != self._drag_start:
-            QTimer.singleShot(0, lambda: self.released.emit(row, p.x(), p.y()))
-        elif self._drag_start is not None:
-            sp = event.scenePos()
-            QTimer.singleShot(0, lambda: self.tapped.emit(sp.x(), sp.y()))
-        self._drag_start = None
 
 # Back-to-front draw order — unlisted layers are appended after.
 # Inner copper layers sit between B_Cu and F_Cu; up to 30 are supported.
@@ -123,13 +94,7 @@ class PanelScene(QGraphicsScene):
 
     layers_loaded = Signal(list)   # list[str] of layer names after each render
     panel_size_changed = Signal(float, float)  # panel width_mm, height_mm (0,0 = none)
-    board_position_updated = Signal(float, float)  # new scene_cx, scene_cy after drag (single-board path)
-    boards_positions_updated = Signal(object)       # dict[int, tuple[float,float]] (multi-board path)
-
-    tab_placement_requested    = Signal(float, float)  # scene x, y of click on highlight
-    tab_marker_moved           = Signal(int, float, float)  # idx, new scene x, y
-    tab_marker_delete_requested = Signal(int)               # idx
-    tab_marker_hovered         = Signal(int)                # idx of hovered tab marker
+    boards_positions_updated = Signal(object)  # dict[int, tuple[float,float,float]] (cx,cy,rot)
 
     def __init__(self, parent=None) -> None:
         super().__init__(parent)
@@ -139,22 +104,16 @@ class PanelScene(QGraphicsScene):
         self._svg_renderers: list[QSvgRenderer] = []
         self._panel_rect: QRectF | None = None
         self._layer_items: dict[str, QGraphicsSvgItem] = {}
-        # Single-board highlight (tabs mode / grid mode)
-        self._highlight_item: _BoardHighlightItem | None = None
-        self._highlight_renderer: QSvgRenderer | None = None
-        # Multi-board highlights (manual layout mode)
-        self._highlight_items: dict[int, _BoardHighlightItem] = {}
-        self._highlight_renderers: dict[int, QSvgRenderer] = {}
+        # Board overlay items (persistent per-board handles)
+        self._overlay_items: dict[int, BoardOverlayItem] = {}
         self._drag_snapshots: dict[int, QPointF] = {}
         self._drag_emit_pending: bool = False
         # Hover overlay
-        self._hover_item: _BoardHighlightItem | None = None
+        self._hover_item: _HoverItem | None = None
         self._hover_renderer: QSvgRenderer | None = None
-        # Tab markers
-        self._tab_markers: list[TabMarkerItem] = []
         self._partition_line_items: list = []
         # Float overlays (paste float mode)
-        self._float_items: list[_BoardHighlightItem] = []
+        self._float_items: list[_HoverItem] = []
         self._float_renderers: list[QSvgRenderer] = []
         self._float_origins: list[tuple[float, float]] = []
         self._float_ref_cx: float = 0.0
@@ -175,15 +134,11 @@ class PanelScene(QGraphicsScene):
         self._svg_renderers.clear()
         self._layer_items.clear()
         self._panel_rect = None
-        self._highlight_item = None
-        self._highlight_renderer = None
-        self._highlight_items.clear()
-        self._highlight_renderers.clear()
+        self._overlay_items.clear()
         self._drag_snapshots.clear()
         self._drag_emit_pending = False
         self._hover_item = None
         self._hover_renderer = None
-        self._tab_markers.clear()
         self._partition_line_items.clear()
         self._float_items.clear()
         self._float_renderers.clear()
@@ -229,10 +184,12 @@ class PanelScene(QGraphicsScene):
             self._layer_items[layer_name] = item
             self.addItem(item)
 
+            # Calculate panel width/height by deducting line width from
+            # the SVG width and height
             if panel_w is None and svg_w_mm:
-                panel_w = svg_w_mm
+                panel_w = svg_w_mm - 0.1
             if panel_h is None and svg_h_mm:
-                panel_h = svg_h_mm
+                panel_h = svg_h_mm - 0.1
 
         if panel_w and panel_h:
             self._panel_rect = QRectF(0.0, 0.0, panel_w, panel_h)
@@ -264,15 +221,11 @@ class PanelScene(QGraphicsScene):
         self._svg_renderers.clear()
         self._layer_items.clear()
         self._panel_rect = None
-        self._highlight_item = None
-        self._highlight_renderer = None
-        self._highlight_items.clear()
-        self._highlight_renderers.clear()
+        self._overlay_items.clear()
         self._drag_snapshots.clear()
         self._drag_emit_pending = False
         self._hover_item = None
         self._hover_renderer = None
-        self._tab_markers.clear()
         self._partition_line_items.clear()
         self._float_items.clear()
         self._float_renderers.clear()
@@ -322,148 +275,46 @@ class PanelScene(QGraphicsScene):
             pass
 
     # ------------------------------------------------------------------
-    # Board highlight overlay — single board (tabs mode / grid mode)
+    # Board overlay management
     # ------------------------------------------------------------------
 
-    def highlight_board(
-        self,
-        scene_cx: float,
-        scene_cy: float,
-        w_mm: float,
-        h_mm: float,
-        rotation_deg: float,
-        edge_cuts_svg: str = "",
-        tab_positions: list[dict] | None = None,
-        opacity: float = 0.9,
-        color: str = "#ffffff",
-    ) -> None:
-        """Overlay a draggable board outline centred at (scene_cx, scene_cy) in scene mm.
+    def add_overlay(self, item: BoardOverlayItem) -> None:
+        self._overlay_items[item.board_id] = item
+        self.addItem(item)
 
-        Uses the Edge_Cuts SVG when available; falls back to a dashed rectangle.
-        Dragging the overlay and releasing emits board_position_updated(cx, cy).
+    def remove_overlay(self, board_id: int) -> None:
+        item = self._overlay_items.pop(board_id, None)
+        if item is not None:
+            item.clear_tabs()
+            self.removeItem(item)
 
-        If tab_positions is provided (list of {"x", "y", "a"} dicts in board-local mm),
-        tab marker items are added and the highlight accepts click-to-place via tapped.
-        """
-        self.clear_board_hover()
-        self.clear_board_highlight()
+    def clear_overlays(self) -> None:
+        for item in list(self._overlay_items.values()):
+            item.clear_tabs()
+            self.removeItem(item)
+        self._overlay_items.clear()
 
-        container = _BoardHighlightItem(-1, w_mm, h_mm, opacity=opacity, color=color)
-        container.setPos(scene_cx, scene_cy)
-        container.setRotation(-rotation_deg)  # Qt CW+ needs negation to match KiCad CCW+
-        container.released.connect(lambda row, cx, cy: self.board_position_updated.emit(cx, cy))
-        self.addItem(container)
-        self._highlight_item = container
-
-        if edge_cuts_svg:
-            colored = _set_stroke_width(_colorize_svg(edge_cuts_svg, color), 0.25)
-            renderer = QSvgRenderer(QByteArray(colored.encode("utf-8")))
-            if renderer.isValid():
-                default_w = renderer.defaultSize().width()
-                svg_w = _parse_svg_dim_mm(colored, "width") or w_mm
-                scale = (svg_w / default_w) if default_w > 0 else _MM_PER_PX
-                child = QGraphicsSvgItem()
-                child.setParentItem(container)
-                child.setSharedRenderer(renderer)
-                child.setScale(scale)
-                child.setPos(-w_mm / 2.0, -h_mm / 2.0)
-                self._highlight_renderer = renderer  # keep alive
-            else:
-                container.enable_fallback_rect()
-        else:
-            container.enable_fallback_rect()
-
-        # Tab markers (manual tabs mode) — lock the overlay in place
-        if tab_positions is not None:
-            container.setFlag(QGraphicsItem.GraphicsItemFlag.ItemIsMovable, False)
-            container.setFlag(QGraphicsItem.GraphicsItemFlag.ItemIsSelectable, True)
-            container.setCursor(Qt.CursorShape.CrossCursor)
-            import math
-            container.tapped.connect(self.tab_placement_requested)
-            rad = math.radians(-rotation_deg)  # KiCad CCW+ needs negation in std-math formula
-            cos_r = math.cos(rad)
-            sin_r = math.sin(rad)
-            for idx, pos in enumerate(tab_positions):
-                x_mm = float(pos.get("x", 0.0))
-                y_mm = float(pos.get("y", 0.0))
-                a_deg = float(pos.get("a", 0.0))
-                # Convert board-local to scene coords using KiCad CCW rotation
-                sx = scene_cx + x_mm * cos_r - y_mm * sin_r
-                sy = scene_cy + x_mm * sin_r + y_mm * cos_r
-                marker = TabMarkerItem(idx, a_deg - rotation_deg)
-                marker.setPos(sx, sy)
-                marker.moved.connect(self.tab_marker_moved)
-                marker.delete_requested.connect(self.tab_marker_delete_requested)
-                marker.hovered.connect(self.tab_marker_hovered)
-                self.addItem(marker)
-                self._tab_markers.append(marker)
-
-    # ------------------------------------------------------------------
-    # Board highlight overlays — multiple boards (manual layout mode)
-    # ------------------------------------------------------------------
-
-    def set_board_overlays(
-        self,
-        overlays: list[tuple[int, float, float, float, float, float, str, bool]],
-    ) -> None:
-        """Show draggable outlines for all boards in manual layout mode.
-
-        overlays: list of (row, scene_cx, scene_cy, w_mm, h_mm, rotation_deg, svg, is_selected)
-        Selected boards are drawn at full opacity; unselected boards are dimmed.
-        Dragging any selected board moves all selected boards together; releasing
-        emits boards_positions_updated({row: (new_cx, new_cy), ...}).
-        """
-        self.clear_board_hover()
-        self.clear_board_highlight()
-
-        for row, cx, cy, w, h, rot, svg, is_selected in overlays:
-            opacity = 0.9 if is_selected else 0.35
-            z_val = 150 if is_selected else 145
-            container = _BoardHighlightItem(row, w, h, opacity=opacity)
-            container.setPos(cx, cy)
-            container.setRotation(-rot)
-            container.setZValue(z_val)
-            if is_selected:
-                container.setSelected(True)
-            container.released.connect(self._on_highlight_released)
-            self.addItem(container)
-            self._highlight_items[row] = container
-
-            if svg:
-                color = "#ffffff" if is_selected else "#aaaaaa"
-                colored = _set_stroke_width(_colorize_svg(svg, color), 0.25)
-                renderer = QSvgRenderer(QByteArray(colored.encode("utf-8")))
-                if renderer.isValid():
-                    default_w = renderer.defaultSize().width()
-                    svg_w = _parse_svg_dim_mm(colored, "width") or w
-                    scale = (svg_w / default_w) if default_w > 0 else _MM_PER_PX
-                    child = QGraphicsSvgItem()
-                    child.setParentItem(container)
-                    child.setSharedRenderer(renderer)
-                    child.setScale(scale)
-                    child.setPos(-w / 2.0, -h / 2.0)
-                    self._highlight_renderers[row] = renderer
-                else:
-                    container.enable_fallback_rect()
-            else:
-                container.enable_fallback_rect()
+    def overlay(self, board_id: int) -> BoardOverlayItem | None:
+        return self._overlay_items.get(board_id)
 
     def mousePressEvent(self, event) -> None:
-        # Snapshot positions of all multi-board overlays before any drag
-        self._drag_snapshots = {row: QPointF(item.pos()) for row, item in self._highlight_items.items()}
+        # Snapshot overlay positions before any drag for multi-board move detection.
+        self._drag_snapshots = {
+            bid: QPointF(item.pos()) for bid, item in self._overlay_items.items()
+        }
         super().mousePressEvent(event)
 
-    def _on_highlight_released(self, row: int, cx: float, cy: float) -> None:
+    def _on_overlay_position_changed(self, board_id: int, cx: float, cy: float) -> None:
         if self._drag_emit_pending:
             return
-        moves: dict[int, tuple[float, float]] = {}
-        for r, item in self._highlight_items.items():
-            snap = self._drag_snapshots.get(r)
+        moves: dict[int, tuple[float, float, float]] = {}
+        for bid, item in self._overlay_items.items():
+            snap = self._drag_snapshots.get(bid)
             cur = item.pos()
             if snap is not None and (
                 abs(cur.x() - snap.x()) > 0.001 or abs(cur.y() - snap.y()) > 0.001
             ):
-                moves[r] = (cur.x(), cur.y())
+                moves[bid] = (cur.x(), cur.y(), -item.rotation() or 0.0)
         if moves:
             self._drag_emit_pending = True
             self.boards_positions_updated.emit(moves)
@@ -473,9 +324,9 @@ class PanelScene(QGraphicsScene):
         self._drag_emit_pending = False
 
     def select_tab_marker(self, idx: int) -> None:
-        """Select the tab marker at idx, deselecting all others."""
-        for i, marker in enumerate(self._tab_markers):
-            marker.setSelected(i == idx)
+        """Select the tab marker at idx across all overlay items."""
+        for item in self._overlay_items.values():
+            item.select_tab_marker(idx)
 
     def hover_board(
         self,
@@ -486,14 +337,11 @@ class PanelScene(QGraphicsScene):
         rotation_deg: float,
         edge_cuts_svg: str = "",
     ) -> None:
-        """Show a dim non-interactive preview overlay. Does not affect the selected highlight."""
+        """Show a dim non-interactive preview overlay. Does not affect board overlays."""
         self.clear_board_hover()
-        container = _BoardHighlightItem(-1, w_mm, h_mm, opacity=0.4)
+        container = _HoverItem(w_mm, h_mm)
         container.setPos(scene_cx, scene_cy)
         container.setRotation(-rotation_deg)
-        container.setFlag(QGraphicsItem.GraphicsItemFlag.ItemIsMovable, False)
-        container.setZValue(140)
-        container.setCursor(Qt.CursorShape.ArrowCursor)
         self.addItem(container)
         self._hover_item = container
         if edge_cuts_svg:
@@ -519,19 +367,6 @@ class PanelScene(QGraphicsScene):
             self.removeItem(self._hover_item)
             self._hover_item = None
         self._hover_renderer = None
-
-    def clear_board_highlight(self) -> None:
-        for marker in self._tab_markers:
-            self.removeItem(marker)
-        self._tab_markers.clear()
-        if self._highlight_item is not None:
-            self.removeItem(self._highlight_item)
-            self._highlight_item = None
-        self._highlight_renderer = None
-        for item in self._highlight_items.values():
-            self.removeItem(item)
-        self._highlight_items.clear()
-        self._highlight_renderers.clear()
 
     # ------------------------------------------------------------------
     # Float overlays (copy/paste float mode)
@@ -571,9 +406,8 @@ class PanelScene(QGraphicsScene):
             self._float_origins.append((sx - ref_cx, sy - ref_cy))
             rot = float(entry.get("rotation", 0.0))
 
-            item = _BoardHighlightItem(-1, w_mm, h_mm, opacity=0.5, color="#88ff88")
-            item.setFlag(QGraphicsItem.GraphicsItemFlag.ItemIsMovable, False)
-            item.setFlag(QGraphicsItem.GraphicsItemFlag.ItemIsSelectable, False)
+            item = _HoverItem(w_mm, h_mm, color="#88ff88")
+            item.setOpacity(0.5)
             item.setZValue(160)
             item.setPos(sx, sy)
             item.setRotation(-rot)
@@ -609,7 +443,7 @@ class PanelScene(QGraphicsScene):
         result = []
         for item in self._float_items:
             p = item.pos()
-            rot = -item.rotation()  # undo Qt CW negation
+            rot = -item.rotation() or 0.0  # undo Qt CW negation; collapse -0.0
             result.append((p.x(), p.y(), rot))
         return result
 
@@ -619,6 +453,59 @@ class PanelScene(QGraphicsScene):
         self._float_items.clear()
         self._float_renderers.clear()
         self._float_origins.clear()
+
+    def rotate_float_overlays(self, degrees: float) -> None:
+        """Rotate the float group around the centroid of all items' bounding boxes."""
+        if not self._float_items:
+            return
+        union = self._float_items[0].sceneBoundingRect()
+        for item in self._float_items[1:]:
+            union = union.united(item.sceneBoundingRect())
+        cx, cy = union.center().x(), union.center().y()
+
+        # Recover current cursor so origins can be kept consistent
+        cursor_x = self._float_items[0].pos().x() - self._float_origins[0][0]
+        cursor_y = self._float_items[0].pos().y() - self._float_origins[0][1]
+
+        rad = math.radians(degrees)
+        cos_a, sin_a = math.cos(rad), math.sin(rad)
+        new_origins: list[tuple[float, float]] = []
+        for item, (off_x, off_y) in zip(self._float_items, self._float_origins):
+            p = item.pos()
+            dx, dy = p.x() - cx, p.y() - cy
+            new_x = cx + dx * cos_a - dy * sin_a
+            new_y = cy + dx * sin_a + dy * cos_a
+            item.setPos(new_x, new_y)
+            item.setRotation(item.rotation() - degrees)
+            new_origins.append((new_x - cursor_x, new_y - cursor_y))
+        self._float_origins[:] = new_origins
+
+    def rotate_board_overlays(self, degrees: float) -> None:
+        """Rotate selected board overlays as a group around their bounding box centroid.
+
+        Emits boards_positions_updated with updated (cx, cy, rotation) for each moved board.
+        """
+        selected = {bid: item for bid, item in self._overlay_items.items() if item.isSelected()}
+        if not selected:
+            return
+        items_list = list(selected.values())
+        union = items_list[0].sceneBoundingRect()
+        for item in items_list[1:]:
+            union = union.united(item.sceneBoundingRect())
+        cx, cy = union.center().x(), union.center().y()
+
+        rad = math.radians(degrees)
+        cos_a, sin_a = math.cos(rad), math.sin(rad)
+        moves: dict[int, tuple[float, float, float]] = {}
+        for bid, item in selected.items():
+            p = item.pos()
+            dx, dy = p.x() - cx, p.y() - cy
+            new_x = cx + dx * cos_a - dy * sin_a
+            new_y = cy + dx * sin_a + dy * cos_a
+            item.setPos(new_x, new_y)
+            item.setRotation(item.rotation() - degrees)
+            moves[bid] = (new_x, new_y, -item.rotation() or 0.0)
+        self.boards_positions_updated.emit(moves)
 
     # ------------------------------------------------------------------
     # Handle placement
