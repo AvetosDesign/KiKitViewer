@@ -15,6 +15,37 @@ from shapely.ops import unary_union, voronoi_diagram
 _last_debug_geometries: dict = {}
 
 
+def _grid_substrate_rotation(substrate_idx: int, preset) -> float:
+    """Return the effective rotation (degrees) for a substrate in KiKit's native grid layout.
+
+    KiKit's TableLayoutPlugin populates _substrate_rotations for manual layout;
+    for grid layout the list is empty, so we derive the rotation from the preset.
+    """
+    try:
+        alternation = preset["layout"]["alternation"]
+    except (KeyError, TypeError):
+        return 0.0
+
+    if alternation == "none":
+        return 0.0
+
+    try:
+        cols = int(preset["layout"]["cols"])
+    except (KeyError, TypeError, ValueError):
+        cols = 1
+
+    col = substrate_idx % cols
+    row = substrate_idx // cols
+
+    if alternation == "cols" and col % 2 == 1:
+        return 180.0
+    if alternation == "rows" and row % 2 == 1:
+        return 180.0
+    if alternation == "rowsCols" and (col + row) % 2 == 1:
+        return 180.0
+    return 0.0
+
+
 class ManualTabsPlugin(TabsPlugin):
     """
     KiKit TabsPlugin that places tabs at explicit board-local positions.
@@ -76,9 +107,13 @@ class ManualTabsPlugin(TabsPlugin):
             try:
                 from kikit_viewer.plugins.table_layout import _substrate_rotations
 
-                subrot_deg = (
-                    float(_substrate_rotations[i]) if i < len(_substrate_rotations) else 0.0
-                )
+                if i < len(_substrate_rotations):
+                    subrot_deg = float(_substrate_rotations[i])
+                else:
+                    # Grid layout mode: _substrate_rotations is empty because
+                    # TableLayoutPlugin was not used.  Derive rotation from the
+                    # alternation setting and column count instead.
+                    subrot_deg = _grid_substrate_rotation(i, self.preset)
             except (ImportError, IndexError, TypeError, ValueError):
                 subrot_deg = 0.0
 

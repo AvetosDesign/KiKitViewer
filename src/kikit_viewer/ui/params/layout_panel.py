@@ -52,12 +52,9 @@ class _RowCycleDelegate(QStyledItemDelegate):
         key = event.key()
         mods = event.modifiers()
         backward = key == Qt.Key.Key_Backtab or (
-            key == Qt.Key.Key_Tab
-            and bool(mods & Qt.KeyboardModifier.ShiftModifier)
+            key == Qt.Key.Key_Tab and bool(mods & Qt.KeyboardModifier.ShiftModifier)
         )
-        forward = key == Qt.Key.Key_Tab and not bool(
-            mods & Qt.KeyboardModifier.ShiftModifier
-        )
+        forward = key == Qt.Key.Key_Tab and not bool(mods & Qt.KeyboardModifier.ShiftModifier)
         enter = key in (Qt.Key.Key_Return, Qt.Key.Key_Enter)
 
         if enter:
@@ -75,10 +72,13 @@ class _RowCycleDelegate(QStyledItemDelegate):
             next_col = (col + (-1 if backward else 1)) % self._table.columnCount()
             self.commitData.emit(editor)
             self.closeEditor.emit(editor, QAbstractItemDelegate.EndEditHint.NoHint)
-            QTimer.singleShot(0, lambda: (
-                self._table.setCurrentCell(row, next_col),
-                self._table.editItem(self._table.item(row, next_col)),
-            ))
+            QTimer.singleShot(
+                0,
+                lambda: (
+                    self._table.setCurrentCell(row, next_col),
+                    self._table.editItem(self._table.item(row, next_col)),
+                ),
+            )
             return True
 
         return super().eventFilter(editor, event)
@@ -93,10 +93,10 @@ class LayoutPanel(QWidget):
                 translated to KiKit's plugin API at run time.
     """
 
-    board_highlighted   = Signal(str, float, float, float, float, float)  # svg, x, y, w, h, rotation
-    boards_highlighted  = Signal(list)   # list of (row, cx, cy, w, h, rot, svg, is_selected) tuples
-    board_deselected    = Signal()
-    board_hovered       = Signal(int)   # table row index
+    board_highlighted = Signal(str, float, float, float, float, float)  # svg, x, y, w, h, rotation
+    boards_highlighted = Signal(list)  # list of (row, cx, cy, w, h, rot, svg, is_selected) tuples
+    board_deselected = Signal()
+    board_hovered = Signal(int)  # table row index
     board_hover_cleared = Signal()
 
     def __init__(self, model: ConfigModel, parent=None) -> None:
@@ -106,8 +106,6 @@ class LayoutPanel(QWidget):
         self._grid_widgets: dict[str, QWidget] = {}
         self._board_size: tuple[float, float] | None = None
         self._edge_cuts_svg: str | None = None
-        self._panel_ox: float = 0.0
-        self._panel_oy: float = 0.0
         self._last_selected_row: int | None = None
         model.board_path_changed.connect(lambda _: self._invalidate_board_size())
 
@@ -247,9 +245,7 @@ class LayoutPanel(QWidget):
         # itemChanged fires automatically, which calls _on_table_changed
 
     def _remove_selected_rows(self) -> None:
-        rows = sorted(
-            {idx.row() for idx in self._table.selectedIndexes()}, reverse=True
-        )
+        rows = sorted({idx.row() for idx in self._table.selectedIndexes()}, reverse=True)
         for row in rows:
             self._table.removeRow(row)
         self._on_table_changed()
@@ -282,37 +278,10 @@ class LayoutPanel(QWidget):
         self._edge_cuts_svg = None
 
     def _get_board_size(self) -> tuple[float, float] | None:
-        if self._board_size is not None:
-            return self._board_size
-        board_path = self._model.board_path
-        if board_path is None:
-            return None
-        try:
-            import pcbnew  # type: ignore[import]
-            board = pcbnew.LoadBoard(str(board_path))
-            bbox = board.GetBoardEdgesBoundingBox()
-            self._board_size = (
-                pcbnew.ToMM(bbox.GetWidth()),
-                pcbnew.ToMM(bbox.GetHeight()),
-            )
-            return self._board_size
-        except Exception:
-            return None
+        return self._board_size
 
     def _get_edge_cuts_svg(self) -> str | None:
-        if self._edge_cuts_svg is not None:
-            return self._edge_cuts_svg
-        board_path = self._model.board_path
-        if board_path is None:
-            return None
-        try:
-            from kikit_viewer.renderer.pcbnew_renderer import PcbnewSvgRenderer
-            layers = PcbnewSvgRenderer().render_layers(board_path, ["Edge_Cuts"])
-            svg = layers.get("Edge_Cuts", "")
-            self._edge_cuts_svg = svg or None
-            return self._edge_cuts_svg
-        except Exception:
-            return None
+        return self._edge_cuts_svg
 
     def eventFilter(self, obj, event) -> bool:
         if obj is self._table.viewport() and event.type() == QEvent.Type.Leave:
@@ -375,6 +344,48 @@ class LayoutPanel(QWidget):
             idx, QItemSelectionModel.SelectionFlag.NoUpdate
         )
 
+    def _framing_min_expansion(
+        self,
+        frame_type: str,
+        content_w: float,
+        content_h: float,
+        frame_width: float,
+        frame_hspace: float,
+        frame_vspace: float,
+    ) -> tuple[float, float]:
+        """
+        Return per-side rail expansion due to mintotalwidth/mintotalheight.
+        
+        KiKit expands rails symmetrically when the natural panel size falls below the
+        minimum total dimension.  The returned values must be subtracted from panel_ox/
+        panel_oy so that overlay items land on the actual board positions in the SVG.
+        """
+        try:
+            mintotalw = float(self._model.get("framing", "mintotalwidth") or 0.0)
+            mintotalh = float(self._model.get("framing", "mintotalheight") or 0.0)
+        except (KeyError, ValueError):
+            return 0.0, 0.0
+
+        if frame_type in ("frame", "tightframe"):
+            nat_w = content_w + 2 * frame_hspace + 2 * frame_width
+            nat_h = content_h + 2 * frame_vspace + 2 * frame_width
+            dx = max(0.0, (mintotalw - nat_w) / 2.0)
+            dy = max(0.0, (mintotalh - nat_h) / 2.0)
+        elif frame_type == "railstb":
+            # No left/right rails — mintotalwidth widens the strips but does not
+            # shift boards horizontally.
+            nat_h = content_h + 2 * frame_vspace + 2 * frame_width
+            dx = 0.0
+            dy = max(0.0, (mintotalh - nat_h) / 2.0)
+        elif frame_type == "railslr":
+            nat_w = content_w + 2 * frame_hspace + 2 * frame_width
+            dx = max(0.0, (mintotalw - nat_w) / 2.0)
+            dy = 0.0
+        else:
+            return 0.0, 0.0
+
+        return dx, dy
+
     def _compute_panel_origin(self) -> tuple[float, float] | None:
         """Return (panel_ox, panel_oy) from board positions + framing, or None if no board."""
         size = self._get_board_size()
@@ -385,28 +396,35 @@ class LayoutPanel(QWidget):
             positions = self._model.get("layout", "positions") or []
         except KeyError:
             positions = []
-        min_x = min((float(p.get("x", 0.0)) for p in positions), default=0.0)
-        min_y = min((float(p.get("y", 0.0)) for p in positions), default=0.0)
+        lt_x = min((float(p.get("x", 0.0)) for p in positions), default=0.0)
+        tp_y = min((float(p.get("y", 0.0)) for p in positions), default=0.0)
+        rt_x = max((float(p.get("x", 0.0)) for p in positions), default=0.0)
+        bt_y = max((float(p.get("y", 0.0)) for p in positions), default=0.0)
         try:
-            frame_type   = str(self._model.get("framing", "type"))
-            frame_width  = float(self._model.get("framing", "width"))
+            frame_type = str(self._model.get("framing", "type"))
+            frame_width = float(self._model.get("framing", "width"))
             frame_hspace = float(self._model.get("framing", "hspace"))
             frame_vspace = float(self._model.get("framing", "vspace"))
         except KeyError:
             frame_type, frame_width, frame_hspace, frame_vspace = "none", 0.0, 0.0, 0.0
         if frame_type in ("frame", "tightframe"):
-            ox = min_x - w / 2.0 - frame_hspace - frame_width
-            oy = min_y - h / 2.0 - frame_vspace - frame_width
+            ox = lt_x - w / 2.0 - frame_hspace - frame_width
+            oy = tp_y - h / 2.0 - frame_vspace - frame_width
         elif frame_type == "railstb":
-            ox = min_x - w / 2.0
-            oy = min_y - h / 2.0 - frame_vspace - frame_width
+            ox = lt_x - w / 2.0
+            oy = tp_y - h / 2.0 - frame_vspace - frame_width
         elif frame_type == "railslr":
-            ox = min_x - w / 2.0 - frame_hspace - frame_width
-            oy = min_y - h / 2.0
+            ox = lt_x - w / 2.0 - frame_hspace - frame_width
+            oy = tp_y - h / 2.0
         else:
-            ox = min_x - w / 2.0
-            oy = min_y - h / 2.0
-        return ox, oy
+            ox = lt_x - w / 2.0
+            oy = tp_y - h / 2.0
+        content_w = (rt_x - lt_x) + w
+        content_h = (bt_y - tp_y) + h
+        dx, dy = self._framing_min_expansion(
+            frame_type, content_w, content_h, frame_width, frame_hspace, frame_vspace
+        )
+        return ox - dx, oy - dy
 
     def board_scene_data(self, row: int) -> tuple[float, float, float, float, float, str] | None:
         """Return (scene_cx, scene_cy, w_mm, h_mm, rotation_deg, svg) for row, or None."""
@@ -441,16 +459,9 @@ class LayoutPanel(QWidget):
         if rows:
             self._last_selected_row = rows[0]
 
-        if not rows:
-            self.board_deselected.emit()
-            return
-
-        # Update panel origin cache
-        origin = self._compute_panel_origin()
-        if origin:
-            self._panel_ox, self._panel_oy = origin
-
-        # Build overlay list for all boards (used by MainWindow for set_board_overlays)
+        # Build overlay list for all boards (used by MainWindow for set_board_overlays).
+        # Always emit boards_highlighted when boards exist — even with no selection —
+        # so unselected outlines remain visible and tappable on the canvas.
         overlays = []
         for row in range(self._table.rowCount()):
             data = self.board_scene_data(row)
@@ -458,14 +469,16 @@ class LayoutPanel(QWidget):
                 continue
             cx, cy, w, h, rot, svg = data
             overlays.append((row, cx, cy, w, h, rot, svg, row in selected_rows))
-        self.boards_highlighted.emit(overlays)
 
-        # Also emit legacy single-board signal (for grid-mode tabs path in highlight_first_board)
-        row = rows[0]
-        data = self.board_scene_data(row)
-        if data is not None:
-            cx, cy, w, h, rot, svg = data
-            self.board_highlighted.emit(svg, cx, cy, w, h, rot)
+        if overlays:
+            self.boards_highlighted.emit(overlays)
+        else:
+            try:
+                is_manual = self._model.get("layout", "type") == "manual"
+            except KeyError:
+                is_manual = False
+            if is_manual:
+                self.board_deselected.emit()
 
     def _seed_table_from_grid(self) -> None:
         """Pre-populate table positions by computing the current grid layout."""
@@ -492,11 +505,13 @@ class LayoutPanel(QWidget):
                 flip_row = (r % 2 == 1) and alternation in ("rows", "rowsCols")
                 flip_col = (c % 2 == 1) and alternation in ("cols", "rowsCols")
                 extra = 180.0 if (flip_row ^ flip_col) else 0.0
-                positions.append({
-                    "x": round(c * (board_w + hspace), 3),
-                    "y": round(r * (board_h + vspace), 3),
-                    "rotation": round(rotation + extra, 3),
-                })
+                positions.append(
+                    {
+                        "x": round(c * (board_w + hspace), 3),
+                        "y": round(r * (board_h + vspace), 3),
+                        "rotation": round(rotation + extra, 3),
+                    }
+                )
         self._model.set("layout", "positions", positions)
 
     def highlight_first_board(self) -> None:
@@ -529,8 +544,8 @@ class LayoutPanel(QWidget):
             rotation = 0.0
 
         try:
-            frame_type   = str(self._model.get("framing", "type"))
-            frame_width  = float(self._model.get("framing", "width"))
+            frame_type = str(self._model.get("framing", "type"))
+            frame_width = float(self._model.get("framing", "width"))
             frame_hspace = float(self._model.get("framing", "hspace"))
             frame_vspace = float(self._model.get("framing", "vspace"))
         except KeyError:
@@ -549,42 +564,32 @@ class LayoutPanel(QWidget):
             panel_ox = -w / 2.0
             panel_oy = -h / 2.0
 
-        self._panel_ox = panel_ox
-        self._panel_oy = panel_oy
+        try:
+            cols_n = int(self._model.get("layout", "cols"))
+            rows_n = int(self._model.get("layout", "rows"))
+            hspace_l = float(self._model.get("layout", "hspace"))
+            vspace_l = float(self._model.get("layout", "vspace"))
+        except (KeyError, TypeError, ValueError):
+            cols_n, rows_n, hspace_l, vspace_l = 1, 1, 0.0, 0.0
+        content_w = cols_n * w + (cols_n - 1) * hspace_l
+        content_h = rows_n * h + (rows_n - 1) * vspace_l
+        dx, dy = self._framing_min_expansion(
+            frame_type, content_w, content_h, frame_width, frame_hspace, frame_vspace
+        )
+        panel_ox -= dx
+        panel_oy -= dy
+
         svg = self._get_edge_cuts_svg() or ""
         self.board_highlighted.emit(svg, -panel_ox, -panel_oy, w, h, rotation)
 
     def restore_highlight(self) -> None:
-        """Re-emit board_highlighted for the currently selected row after a scene reload."""
-        rows = sorted({idx.row() for idx in self._table.selectedIndexes()})
-        if rows:
-            self._on_selection_changed()
+        """Rebuild board overlays after a scene reload (load_panel clears everything)."""
+        self._on_selection_changed()
 
-    def apply_board_drop(self, scene_cx: float, scene_cy: float) -> None:
-        """Update the selected table row from a drag-drop on the canvas highlight (single-board path)."""
-        rows = sorted({idx.row() for idx in self._table.selectedIndexes()})
-        if not rows:
-            return
-        row = rows[0]
-        new_x = round(scene_cx + self._panel_ox, 3)
-        new_y = round(scene_cy + self._panel_oy, 3)
-        self._refreshing = True
-        try:
-            ix = self._table.item(row, 0)
-            iy = self._table.item(row, 1)
-            if ix:
-                ix.setText(str(new_x))
-            if iy:
-                iy.setText(str(new_y))
-        finally:
-            self._refreshing = False
-        self._on_table_changed()
-        self._table.selectRow(row)
+    def apply_board_drop(self, moves: dict) -> None:
+        """Update table rows from a drag or rotation on the canvas.
 
-    def apply_multi_board_drop(self, moves: dict) -> None:
-        """Update multiple table rows from a multi-board drag on the canvas.
-
-        moves: dict mapping row → (new_scene_cx, new_scene_cy)
+        moves: dict mapping row → (new_scene_cx, new_scene_cy[, new_rotation_deg])
         """
         origin = self._compute_panel_origin()
         if origin is None:
@@ -593,7 +598,8 @@ class LayoutPanel(QWidget):
         moved_rows = sorted(moves.keys())
         self._refreshing = True
         try:
-            for row, (scene_cx, scene_cy) in moves.items():
+            for row, pos_data in moves.items():
+                scene_cx, scene_cy = pos_data[0], pos_data[1]
                 new_x = round(scene_cx + ox, 3)
                 new_y = round(scene_cy + oy, 3)
                 ix = self._table.item(row, 0)
@@ -602,6 +608,10 @@ class LayoutPanel(QWidget):
                     ix.setText(str(new_x))
                 if iy:
                     iy.setText(str(new_y))
+                if len(pos_data) > 2:
+                    ir = self._table.item(row, 2)
+                    if ir:
+                        ir.setText(str(round(pos_data[2] or 0.0, 3)))
         finally:
             self._refreshing = False
         self._on_table_changed()
@@ -613,7 +623,6 @@ class LayoutPanel(QWidget):
     # ------------------------------------------------------------------
 
     def _refresh(self) -> None:
-        self.board_deselected.emit()
         self._refreshing = True
         try:
             layout_type = str(self._model.get("layout", "type"))
@@ -666,3 +675,7 @@ class LayoutPanel(QWidget):
             row_to_select = min(self._last_selected_row, n - 1)
             if row_to_select >= 0:
                 self._table.selectRow(row_to_select)
+                return
+        # No prior selection to restore — still push overlays so boards are visible
+        # and tappable on the canvas (e.g. first switch from Grid → Manual).
+        self._on_selection_changed()
