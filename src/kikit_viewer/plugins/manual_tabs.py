@@ -19,12 +19,13 @@ def _grid_substrate_rotation(substrate_idx: int, preset) -> float:
     """Return the effective rotation (degrees) for a substrate in KiKit's native grid layout.
 
     KiKit's TableLayoutPlugin populates _substrate_rotations for manual layout;
-    for grid layout the list is empty, so we derive the rotation from the preset.
+    for grid layout the list is empty, so we calculate the rotation from the
+    alternation setting in the model.
     """
     try:
         alternation = preset["layout"]["alternation"]
     except (KeyError, TypeError):
-        return 0.0
+        alternation = "none"
 
     if alternation == "none":
         return 0.0
@@ -96,10 +97,9 @@ class ManualTabsPlugin(TabsPlugin):
 
         for i, substrate in enumerate(panel.substrates):
             # Use the bounding-box centre, not the geometric centroid.
+            # (For asymmetric boards the centroid diverges from the bbox centre.)
             # load_outline() centres the board outline at its bbox centre, so
             # our stored (x_mm, y_mm) offsets are relative to that same point.
-            # For asymmetric boards the centroid diverges from the bbox centre,
-            # which would place annotations incorrectly.
             minx, miny, maxx, maxy = substrate.substrates.bounds
             cx_iu = (minx + maxx) / 2.0  # BB center x location
             cy_iu = (miny + maxy) / 2.0  # BB center y location

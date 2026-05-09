@@ -1,7 +1,7 @@
 from __future__ import annotations
 
-import enum
 import math
+from typing import Protocol
 
 from PySide6.QtCore import QByteArray, QRectF, Qt, Signal
 from PySide6.QtGui import QColor, QPen
@@ -14,21 +14,21 @@ from kikit_viewer.ui.canvas.tab_marker_item import TabMarkerItem
 _MM_PER_PX = 25.4 / 96.0
 
 
-class BoardOverlayMode(enum.Enum):
-    Layout = "layout"
-    Tab    = "tab"
+class OverlayOwner(Protocol):
+    """Accessor interface implemented by MainWindow; avoids circular imports."""
+
+    def in_manual_tab_mode(self) -> bool: ...
+    def is_layout_manual(self) -> bool: ...
+    def get_tab_positions(self) -> list[dict]: ...
+    def is_first(self, board_id: int) -> bool: ...
 
 
 class BoardOverlayItem(QGraphicsObject):
     """
     Self-contained board highlight overlay — one instance per board.
 
-    Layout mode: draggable; emits position_changed synchronously on drag release.
-    Tab mode: not draggable; left-click converts scene coords to board-local, snaps
-    to the pre-computed outline offset, and emits tapped.
-
-    Created once per board and updated in-place via update_geometry() / set_tabs().
-    Eliminates the destroy-and-recreate cycle that caused the tab highlight bug.
+    apply_context() is called by MainWindow on every tab change to update
+    visibility, cursor, and movable flag based on the active parameter tab.
     """
 
     position_changed = Signal(int, float, float)              # board_id, new scene_cx, scene_cy
@@ -49,16 +49,17 @@ class BoardOverlayItem(QGraphicsObject):
         rotation_deg: float,
         svg: str = "",
         color: str = "#ffffff",
+        owner: OverlayOwner | None = None,
         parent=None,
     ) -> None:
         super().__init__(parent)
         self._board_id = board_id
+        self._owner = owner
         self._outline = outline
         self._w = w_mm
         self._h = h_mm
         self._rotation_deg = rotation_deg
         self._color = color
-        self._mode = BoardOverlayMode.Layout
         self._fallback = False
         self._drag_start = None
         self._press_modifiers = Qt.KeyboardModifier.NoModifier
@@ -71,7 +72,6 @@ class BoardOverlayItem(QGraphicsObject):
         self._outsetline = None
         self._precompute_offsets()
 
-        self.setFlag(QGraphicsItem.GraphicsItemFlag.ItemIsMovable)
         self.setFlag(QGraphicsItem.GraphicsItemFlag.ItemIsSelectable)
         self.setCursor(Qt.CursorShape.SizeAllCursor)
         self.setZValue(150)
@@ -93,21 +93,9 @@ class BoardOverlayItem(QGraphicsObject):
         return self._outline
 
     @property
-    def mode(self) -> BoardOverlayMode:
-        return self._mode
-
-    @mode.setter
-    def mode(self, value: BoardOverlayMode) -> None:
-        if self._mode == value:
-            return
-        self._mode = value
-        if value == BoardOverlayMode.Layout:
-            self.setFlag(QGraphicsItem.GraphicsItemFlag.ItemIsMovable, True)
-            self.setCursor(Qt.CursorShape.SizeAllCursor)
-            self.clear_tabs()  # hide markers when leaving Tab mode
-        else:
-            self.setFlag(QGraphicsItem.GraphicsItemFlag.ItemIsMovable, False)
-            self.setCursor(Qt.CursorShape.CrossCursor)
+    def is_in_tab_mode(self) -> bool:
+        """True when apply_context placed this item in tab-placement mode."""
+        return not bool(self.flags() & QGraphicsItem.GraphicsItemFlag.ItemIsMovable)
 
     # ------------------------------------------------------------------
     # In-place update API
@@ -145,23 +133,16 @@ class BoardOverlayItem(QGraphicsObject):
                 sc.removeItem(marker)
         self._tab_markers.clear()
 
-        if not positions or self._mode != BoardOverlayMode.Tab:
+        if not positions or not self.is_in_tab_mode:
             return
-
-        cx = self.pos().x()
-        cy = self.pos().y()
-        rad = math.radians(-self._rotation_deg)
-        cos_r = math.cos(rad)
-        sin_r = math.sin(rad)
 
         for idx, pos in enumerate(positions):
             x_mm = float(pos.get("x", 0.0))
             y_mm = float(pos.get("y", 0.0))
             a_deg = float(pos.get("a", 0.0))
-            sx = cx + x_mm * cos_r - y_mm * sin_r
-            sy = cy + x_mm * sin_r + y_mm * cos_r
+            scene_pt = self.mapToScene(x_mm, y_mm)
             marker = TabMarkerItem(idx, a_deg - self._rotation_deg)
-            marker.setPos(sx, sy)
+            marker.setPos(scene_pt)
             marker.moved.connect(self._on_marker_moved)
             marker.delete_requested.connect(self._on_marker_delete_requested)
             marker.hovered.connect(self.tab_hovered)
@@ -188,6 +169,28 @@ class BoardOverlayItem(QGraphicsObject):
         for i, marker in enumerate(self._tab_markers):
             marker.setSelected(i == idx)
 
+    def apply_context(self, tab_label: str) -> None:
+        """Update visibility, cursor, and movable flag for the active parameter tab."""
+        if self._owner is None:
+            return
+        if tab_label == "Layout" and self._owner.is_layout_manual():
+            self.setFlag(QGraphicsItem.GraphicsItemFlag.ItemIsMovable, True)
+            self.setCursor(Qt.CursorShape.SizeAllCursor)
+            self.clear_tabs()
+            self.setVisible(True)
+        elif (
+            tab_label == "Tabs"
+            and self._owner.in_manual_tab_mode()
+            and self._owner.is_first(self._board_id)
+        ):
+            self.setFlag(QGraphicsItem.GraphicsItemFlag.ItemIsMovable, False)
+            self.setCursor(Qt.CursorShape.CrossCursor)
+            self.setVisible(True)
+            self.set_tabs(self._owner.get_tab_positions())
+        else:
+            self.clear_tabs()
+            self.setVisible(False)
+
     # ------------------------------------------------------------------
     # Internal helpers
     # ------------------------------------------------------------------
@@ -200,12 +203,12 @@ class BoardOverlayItem(QGraphicsObject):
         try:
             side = "right" if self._outline.is_ccw else "left"
 
-            # The tab point line is used to position the tabs.  It is 
+            # The tab point line is used to position the tabs.  It is
             # just outside the board outline so points don't end up inside.
             self._tabpointline = self._outline.parallel_offset(0.1, side)
 
             # The outset line provides a target to help us determine the
-            # normal from a given point on the tab point line.  Given a 
+            # normal from a given point on the tab point line.  Given a
             # starting point on the tab point line, the nearest point on the
             # outset line is the end of the normal vector.
             self._outsetline   = self._outline.parallel_offset(1.0, side)
@@ -237,17 +240,12 @@ class BoardOverlayItem(QGraphicsObject):
 
     def _scene_to_local(self, scene_x: float, scene_y: float) -> tuple[float, float]:
         """Convert scene coordinates to board-local mm (origin at board centre)."""
-        cx, cy = self.pos().x(), self.pos().y()
-        rad = math.radians(self._rotation_deg)
-        dx, dy = scene_x - cx, scene_y - cy
-        return (
-            dx * math.cos(rad) - dy * math.sin(rad),
-            dx * math.sin(rad) + dy * math.cos(rad),
-        )
+        pt = self.mapFromScene(scene_x, scene_y)
+        return pt.x(), pt.y()
 
     def _project(self, local_x: float, local_y: float) -> tuple[float, float, float]:
         """
-        Snap a given point to the nearest point on the snap-line and 
+        Snap a given point to the nearest point on the snap-line and
         compute outward normal angle.
         """
         if self._tabpointline is None or self._outsetline is None:
@@ -304,7 +302,7 @@ class BoardOverlayItem(QGraphicsObject):
             # Genuine drag — emit synchronously (no QTimer needed; item is not destroyed).
             self.position_changed.emit(bid, p.x(), p.y())
         elif self._drag_start is not None:
-            if self._mode == BoardOverlayMode.Tab:
+            if self.is_in_tab_mode:
                 sp = event.scenePos()
                 local_x, local_y = self._scene_to_local(sp.x(), sp.y())
                 lx, ly, angle = self._project(local_x, local_y)
