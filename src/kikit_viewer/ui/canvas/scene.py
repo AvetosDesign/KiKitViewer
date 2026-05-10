@@ -26,6 +26,7 @@ from kikit_viewer.ui.canvas.tooling_handle_item import (
 from kikit_viewer.ui.canvas.tooling_handle_item import (
     corners_for_type as tooling_corners_for_type,
 )
+from kikit_viewer.ui.canvas.text_handle_item import TextHandleItem
 
 # Qt 6 SVG renderer assumes 96 DPI; 1 px = this many mm
 _MM_PER_PX = 25.4 / 96.0
@@ -91,6 +92,8 @@ class PanelScene(QGraphicsScene):
     tooling_offset_changed = Signal(float, float)  # hoffset, voffset
     tooling_remove_requested = Signal()
     tooling_reset_requested = Signal()
+
+    text_offset_changed = Signal(float, float)  # hoffset, voffset
 
     layers_loaded = Signal(list)   # list[str] of layer names after each render
     panel_size_changed = Signal(float, float)  # panel width_mm, height_mm (0,0 = none)
@@ -196,6 +199,7 @@ class PanelScene(QGraphicsScene):
             if config is not None:
                 self._add_fiducial_handles(config)
                 self._add_tooling_handles(config)
+                self._add_text_handle(config)
 
         self.layers_loaded.emit(list(self._layer_items.keys()))
         if panel_w and panel_h:
@@ -542,6 +546,19 @@ class PanelScene(QGraphicsScene):
             handle.remove_requested.connect(self.tooling_remove_requested)
             handle.reset_requested.connect(self.tooling_reset_requested)
             self.addItem(handle)
+
+    def _add_text_handle(self, config: dict[str, dict[str, Any]]) -> None:
+        text_cfg = config.get("text", {})
+        if str(text_cfg.get("type", "none")) not in ("simple", "scripted"):
+            return
+
+        anchor  = str(text_cfg.get("anchor",  "tl"))
+        hoffset = float(text_cfg.get("hoffset", 0.0))
+        voffset = float(text_cfg.get("voffset", 0.0))
+
+        handle = TextHandleItem(self._panel_rect, anchor, hoffset, voffset)
+        handle.released.connect(self.text_offset_changed)
+        self.addItem(handle)
 
 
 def _set_stroke_width(svg: str, width_mm: float) -> str:

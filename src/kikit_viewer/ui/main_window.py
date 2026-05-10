@@ -147,6 +147,8 @@ class MainWindow(QMainWindow):
         self._scene.tooling_remove_requested.connect(self._on_tooling_remove)
         self._scene.tooling_reset_requested.connect(self._on_tooling_reset)
 
+        self._scene.text_offset_changed.connect(self._on_text_dragged)
+
         self._scene.layers_loaded.connect(self._layers_panel.populate)
         self._scene.layers_loaded.connect(self._text_panel.populate_layers)
         self._scene.panel_size_changed.connect(self._on_panel_size_changed)
@@ -928,6 +930,10 @@ class MainWindow(QMainWindow):
     def _on_tooling_dragged(self, hoffset: float, voffset: float) -> None:
         self._model.set("tooling", "hoffset", hoffset)
         self._model.set("tooling", "voffset", voffset)
+
+    def _on_text_dragged(self, hoffset: float, voffset: float) -> None:
+        self._model.set("text", "hoffset", hoffset)
+        self._model.set("text", "voffset", voffset)
 
     def _on_tooling_remove(self) -> None:
         self._model.set("tooling", "type", "none")
