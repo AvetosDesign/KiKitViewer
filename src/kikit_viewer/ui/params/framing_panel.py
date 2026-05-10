@@ -140,6 +140,8 @@ class FramingPanel(QWidget):
         self._widgets: dict[tuple[str, str], QWidget] = {}  # (section, key) → widget
         self._refreshing = False
         self._dependent_groups: list[QGroupBox] = []  # greyed out when framing type = "none"
+        self._framing_dep_widgets: list[QWidget] = []   # framing fields other than "type"
+        self._framing_dep_labels: list[QLabel] = []
 
         self._corner_widget = _CornerTreatmentWidget()
         self._corner_widget.changed.connect(self._on_corner_changed)
@@ -164,7 +166,10 @@ class FramingPanel(QWidget):
             for field in SECTIONS.get(section, []):
                 if section == "framing" and field.key in ("chamferwidth", "chamferheight", "fillet"):
                     if field.key == "chamferwidth":
-                        form.addRow(QLabel("Corner treatment"), self._corner_widget)
+                        corner_label = QLabel("Corner treatment")
+                        form.addRow(corner_label, self._corner_widget)
+                        self._framing_dep_widgets.append(self._corner_widget)
+                        self._framing_dep_labels.append(corner_label)
                     continue
                 widget = self._make_widget(section, field)
                 if widget is None:
@@ -175,6 +180,9 @@ class FramingPanel(QWidget):
                     label.setToolTip(field.tooltip)
                     widget.setToolTip(field.tooltip)
                 form.addRow(label, widget)
+                if section == "framing" and field.key != "type":
+                    self._framing_dep_widgets.append(widget)
+                    self._framing_dep_labels.append(label)
 
             inner_layout.addWidget(group)
             if section in ("tooling", "fiducials"):
@@ -271,5 +279,9 @@ class FramingPanel(QWidget):
             pass
 
         has_frame = self._model.get("framing", "type") != "none"
+        for widget in self._framing_dep_widgets:
+            widget.setEnabled(has_frame)
+        for label in self._framing_dep_labels:
+            label.setEnabled(has_frame)
         for group in self._dependent_groups:
             group.setEnabled(has_frame)

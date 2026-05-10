@@ -152,14 +152,15 @@ FIDUCIALS_FIELDS: list[Field] = [
 
 TEXT_FIELDS: list[Field] = [
     Field("type", "Text type", "choice", "none",
-          choices=["none", "simple"],
+          choices=["none", "simple", "scripted"],
           tooltip="Annotation text printed on the panel"),
     Field("text", "Text content", "str", ""),
+    Field("script", "Script filename", "str", ""),
     Field("anchor", "Anchor corner", "choice", "tl",
           choices=["tl", "tr", "bl", "br"]),
     Field("hoffset", "Horizontal offset", "float", 0.0, unit="mm"),
     Field("voffset", "Vertical offset", "float", 0.0, unit="mm"),
-    Field("layer", "Layer", "str", "F_Cu"),
+    Field("layer", "Layer", "str", "F.SilkS"),
     Field("width", "Text width", "float", 1.5, unit="mm"),
     Field("height", "Text height", "float", 1.5, unit="mm"),
     Field("thickness", "Line thickness", "float", 0.3, unit="mm"),

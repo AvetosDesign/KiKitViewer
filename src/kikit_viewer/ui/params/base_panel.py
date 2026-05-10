@@ -10,6 +10,7 @@ from PySide6.QtWidgets import (
     QFormLayout,
     QLabel,
     QLineEdit,
+    QPlainTextEdit,
     QScrollArea,
     QSpinBox,
     QVBoxLayout,
@@ -48,7 +49,11 @@ class SectionPanel(QWidget):
         scroll.setFrameShape(QScrollArea.Shape.NoFrame)
 
         inner = QWidget()
-        self._form = QFormLayout(inner)
+        inner_layout = QVBoxLayout(inner)
+        inner_layout.setContentsMargins(0, 0, 0, 0)
+        inner_layout.setSpacing(0)
+
+        self._form = QFormLayout()
         self._form.setLabelAlignment(Qt.AlignmentFlag.AlignRight)
         self._form.setFieldGrowthPolicy(QFormLayout.FieldGrowthPolicy.ExpandingFieldsGrow)
         self._form.setContentsMargins(8, 8, 8, 8)
@@ -66,6 +71,8 @@ class SectionPanel(QWidget):
                 widget.setToolTip(field.tooltip)
             self._form.addRow(label, widget)
 
+        inner_layout.addLayout(self._form)
+        inner_layout.addStretch()
         scroll.setWidget(inner)
 
         layout = QVBoxLayout(self)
@@ -153,11 +160,17 @@ def _set_widget_value(widget: QWidget, value: Any) -> None:
         idx = widget.findText(str(value))
         if idx >= 0:
             widget.setCurrentIndex(idx)
+        elif widget.isEditable():
+            widget.setCurrentText(str(value))
     elif isinstance(widget, QDoubleSpinBox):
         widget.setValue(float(value))
     elif isinstance(widget, QSpinBox):
         widget.setValue(int(value))
     elif isinstance(widget, QCheckBox):
         widget.setChecked(bool(value))
+    elif isinstance(widget, QPlainTextEdit):
+        widget.blockSignals(True)
+        widget.setPlainText(str(value))
+        widget.blockSignals(False)
     elif isinstance(widget, QLineEdit):
         widget.setText(str(value))

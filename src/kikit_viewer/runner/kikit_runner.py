@@ -130,7 +130,43 @@ def _preprocess_config(config: dict) -> dict:
         tabs["code"] = "kikit_viewer.plugins.manual_tabs.ManualTabsPlugin"
         tabs["arg"]  = _json.dumps(positions)
 
+    text = config.get("text", {})
+    if text.get("type") == "scripted":
+        script_path = text.pop("script", "").strip()
+        if script_path:
+            text["text"] = _run_text_script(script_path)
+        else:
+            text["text"] = "<no script specified>"
+        text["type"] = "simple"
+    else:
+        text.pop("script", None)
+
     return config
+
+
+def _run_text_script(script_path: str) -> str:
+    """
+    Execute a Python script that defines get_text() -> str and return its result.
+
+    The script runs in an isolated namespace. It must define a top-level
+    function named get_text() that returns a plain string.
+    """
+    path = Path(script_path)
+    if not path.is_file():
+        raise FileNotFoundError(f"Script not found: {script_path}")
+    ns: dict = {}
+    exec(path.read_text(encoding="utf-8"), ns)  # noqa: S102
+    get_text = ns.get("get_text")
+    if not callable(get_text):
+        raise AttributeError(
+            f"Script '{script_path}' must define a get_text() function"
+        )
+    result = get_text()
+    if not isinstance(result, str):
+        raise TypeError(
+            f"get_text() must return str, got {type(result).__name__}"
+        )
+    return result
 
 
 def _format_error(exc: Exception) -> str:

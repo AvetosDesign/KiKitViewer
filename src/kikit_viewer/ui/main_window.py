@@ -148,6 +148,7 @@ class MainWindow(QMainWindow):
         self._scene.tooling_reset_requested.connect(self._on_tooling_reset)
 
         self._scene.layers_loaded.connect(self._layers_panel.populate)
+        self._scene.layers_loaded.connect(self._text_panel.populate_layers)
         self._scene.panel_size_changed.connect(self._on_panel_size_changed)
 
         # Board overlay path
@@ -201,7 +202,8 @@ class MainWindow(QMainWindow):
         tabs.addTab(FramingPanel(self._model), "Framing")
         tabs.addTab(self._tabs_panel, "Tabs")
         tabs.addTab(CutsPanel(self._model), "Cuts")
-        tabs.addTab(TextPanel(self._model), "Text")
+        self._text_panel = TextPanel(self._model)
+        tabs.addTab(self._text_panel, "Text")
         tabs.addTab(PostPanel(self._model), "Post")
         self._TABS_TAB_INDEX = 2
 
