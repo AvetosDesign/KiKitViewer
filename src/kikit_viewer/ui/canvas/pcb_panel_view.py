@@ -5,7 +5,7 @@ from PySide6.QtGui import QBrush, QColor, QWheelEvent
 from PySide6.QtWidgets import QGraphicsItem, QGraphicsView, QMenu
 
 
-class PanelView(QGraphicsView):
+class PcbPanelView(QGraphicsView):
     """
     QGraphicsView for the panel canvas.
 
@@ -19,13 +19,15 @@ class PanelView(QGraphicsView):
     """
 
     refresh_requested = Signal()
-    cursor_moved  = Signal(float, float)  # scene x_mm, y_mm
-    cursor_left   = Signal()
+    cursor_moved = Signal(float, float)  # scene x_mm, y_mm
+    cursor_left = Signal()
     canvas_clicked = Signal(float, float, object)  # scene x_mm, y_mm, Qt.KeyboardModifiers
-    add_tab_requested = Signal(float, float)        # scene x_mm, y_mm — "Add Tab Here" context menu
-    float_committed = Signal(float, float)          # scene x_mm, y_mm — left-click commits paste
-    float_cancelled = Signal()                      # Escape or right-click cancels paste
-    rotate_requested = Signal(int)                  # degrees: +90=CCW, -90=CW
+    add_tab_requested = Signal(float, float)  # scene x_mm, y_mm — "Add Tab Here" context menu
+    float_committed = Signal(float, float)  # scene x_mm, y_mm — left-click commits paste
+    float_cancelled = Signal()  # Escape or right-click cancels paste
+    rotate_requested = Signal(int)  # CCW positive
+
+    _ROTATE_INCREMENT = 90
 
     def __init__(self, parent=None) -> None:
         super().__init__(parent)
@@ -129,12 +131,8 @@ class PanelView(QGraphicsView):
         if self._panning and self._pan_start is not None:
             delta = event.position().toPoint() - self._pan_start
             self._pan_start = event.position().toPoint()
-            self.horizontalScrollBar().setValue(
-                self.horizontalScrollBar().value() - delta.x()
-            )
-            self.verticalScrollBar().setValue(
-                self.verticalScrollBar().value() - delta.y()
-            )
+            self.horizontalScrollBar().setValue(self.horizontalScrollBar().value() - delta.x())
+            self.verticalScrollBar().setValue(self.verticalScrollBar().value() - delta.y())
             event.accept()
         else:
             super().mouseMoveEvent(event)
@@ -165,24 +163,36 @@ class PanelView(QGraphicsView):
             super().wheelEvent(event)
 
     def keyPressEvent(self, event) -> None:
+        # <esc> key handling
         if self._float_mode and event.key() == Qt.Key.Key_Escape:
             self.float_cancelled.emit()
             event.accept()
             return
+
+        # The 'R' key rotates: <R> = CCW 90°, <shift><R> = CW 90°
         if event.key() == Qt.Key.Key_R:
-            degrees = -90 if event.modifiers() & Qt.KeyboardModifier.ShiftModifier else 90
+            if event.modifiers() & Qt.KeyboardModifier.ShiftModifier:
+                degrees = self._ROTATE_INCREMENT
+            else:
+                degrees = -self._ROTATE_INCREMENT
             self.rotate_requested.emit(degrees)
             event.accept()
             return
+
+        # <del> key handling (delete selected items)
         if event.key() == Qt.Key.Key_Delete and self.scene():
             from kikit_viewer.ui.canvas.tab_marker_item import TabMarkerItem
+
             for item in self.scene().selectedItems():
                 if isinstance(item, TabMarkerItem):
                     idx = item._idx
                     QTimer.singleShot(0, lambda i=idx, m=item: m.delete_requested.emit(i))
             event.accept()
-        else:
-            super().keyPressEvent(event)
+            return
+
+        # Default handling -- Push it to super()
+        super().keyPressEvent(event)
+        return
 
     def zoom_in(self) -> None:
         self.scale(1.15, 1.15)

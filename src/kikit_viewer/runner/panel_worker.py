@@ -55,7 +55,7 @@ def _format_section(values: dict, types: dict) -> dict:
 
 
 def run(board_path: str, output_path: str, config: dict) -> None:
-    from kikit import panelize_ui             # type: ignore[import]
+    from kikit import panelize_ui             # type: ignore[import]  # noqa: I001
     from kikit import panelize_ui_impl as ki  # type: ignore[import]
 
     type_map = _build_type_map()
@@ -90,11 +90,11 @@ def run(board_path: str, output_path: str, config: dict) -> None:
     finally:
         sys.stdout = real_stdout
 
+    import pcbnew as _pcbnew  # type: ignore[import]  # noqa: I001
     from kikit_viewer.renderer.pcbnew_renderer import PcbnewSvgRenderer
-    import pcbnew as _pcbnew  # type: ignore[import]
 
     # Render the panel layers for display.
-    svgs = PcbnewSvgRenderer().render_layers(Path(output_path))
+    layers = PcbnewSvgRenderer().render_layers(Path(output_path))
 
     # Also render the individual input board so the viewer has its size and
     # Edge_Cuts SVG without needing pcbnew itself.
@@ -113,7 +113,7 @@ def run(board_path: str, output_path: str, config: dict) -> None:
     board_outline_pts = [list(pt) for pt in _outline.coords] if _outline is not None else []
 
     real_stdout.write(json.dumps({
-        "svgs": svgs,
+        "svgs": layers,
         "board_edge_cuts_svg": board_edge_cuts,
         "board_w": board_w,
         "board_h": board_h,

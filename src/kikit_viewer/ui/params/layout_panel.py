@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import math
+
 from PySide6.QtCore import Signal
 from PySide6.QtWidgets import (
     QComboBox,
@@ -10,6 +12,7 @@ from PySide6.QtWidgets import (
 )
 
 from kikit_viewer.config.model import ConfigModel
+from kikit_viewer.ui.canvas.board_overlay_item import BoardSceneData
 from kikit_viewer.ui.params.grid_layout_widget import GridLayoutWidget
 from kikit_viewer.ui.params.table_layout_widget import TableLayoutWidget
 
@@ -25,8 +28,8 @@ class LayoutPanel(QWidget):
     """
 
     board_highlighted = Signal(str, float, float, float, float, float)
-    boards_highlighted = Signal(list)   # list of (idx, cx, cy, w, h, rot, svg, is_selected)
-    board_deselected = Signal()
+    boards_selected = Signal(list)
+    layout_type_changed = Signal()
     board_hovered = Signal(int)
     board_hover_cleared = Signal()
 
@@ -45,7 +48,7 @@ class LayoutPanel(QWidget):
         type_row.addWidget(QLabel("Layout mode"))
         self._type_combo = QComboBox()
         self._type_combo.addItems(["grid", "manual"])
-        self._type_combo.currentTextChanged.connect(self._on_type_changed)
+        self._type_combo.currentTextChanged.connect(self._on_layout_type_changed)
         type_row.addWidget(self._type_combo, 1)
         outer.addLayout(type_row)
 
@@ -58,8 +61,8 @@ class LayoutPanel(QWidget):
 
         # -- Signal wiring ---------------------------------------------------
         for w in (self._grid_widget, self._table_widget):
-            w.positions_changed.connect(self._on_positions_changed)
-            w.selection_changed.connect(self._on_selection_changed)
+            w.positions_changed.connect(self._on_widget_positions_changed)
+            w.selection_changed.connect(self._on_widget_selection_changed)
             w.hovered.connect(self.board_hovered)
             w.hover_cleared.connect(self.board_hover_cleared)
         self._grid_widget.board_highlighted.connect(self.board_highlighted)
@@ -109,7 +112,7 @@ class LayoutPanel(QWidget):
         if origin is not None:
             self._active_widget().apply_board_drop(moves, origin)
 
-    def board_scene_data(self, index: int) -> tuple | None:
+    def board_scene_data(self, index: int) -> BoardSceneData | None:
         return self._active_widget().board_scene_data(index)
 
     def panel_origin(self) -> tuple[float, float] | None:
@@ -121,11 +124,10 @@ class LayoutPanel(QWidget):
     def highlight_first_board(self) -> None:
         self._active_widget().highlight_first_board()
 
-    def set_board_geometry(self, w: float, h: float, edge_cuts_svg: str = "") -> None:
+    def set_board_geometry(self, w: float, h: float, edges_svg: str = "") -> None:
         """Push board size + SVG to both widgets; called by MainWindow after each run."""
-        svg = edge_cuts_svg or ""
-        self._grid_widget.set_board_geometry(w, h, svg)
-        self._table_widget.set_board_geometry(w, h, svg)
+        self._grid_widget.set_board_geometry(w, h, edges_svg)
+        self._table_widget.set_board_geometry(w, h, edges_svg)
 
     @property
     def board_size(self) -> tuple[float, float] | None:
@@ -148,7 +150,8 @@ class LayoutPanel(QWidget):
         self._table_widget._board_size = None
         self._table_widget._edge_cuts_svg = None
 
-    def _on_type_changed(self, layout_type: str) -> None:
+    def _on_layout_type_changed(self, layout_type: str) -> None:
+        """Invoked when the layout type (grid vs. manual) changes."""
         if not self._refreshing:
             self._model.set("layout", "type", layout_type)
             if layout_type == "manual":
@@ -156,7 +159,8 @@ class LayoutPanel(QWidget):
                 if not existing:
                     self._seed_table_from_grid()
             else:
-                self.board_deselected.emit()
+                self.layout_type_changed.emit()
+        # Refresh which layout widget is visible
         self._grid_widget.setVisible(layout_type == "grid")
         self._table_widget.setVisible(layout_type == "manual")
 
@@ -172,43 +176,48 @@ class LayoutPanel(QWidget):
         if positions:
             self._model.set("layout", "positions", positions)
 
-    def _on_positions_changed(self) -> None:
+    def _on_widget_positions_changed(self) -> None:
         # Only act when the signal comes from the active widget
         sender = self.sender()
         if sender is not self._active_widget():
             return
-        self._on_selection_changed(self._active_widget().selected)
 
-    def _on_selection_changed(self, indexes: list[int]) -> None:
-        # Only act when the signal comes from the active widget
+        # TODO: This may work, but it isn't good architecture
+        self._on_widget_selection_changed(self._active_widget().selected)
+
+    def _on_widget_selection_changed(self, indexes: list[int]) -> None:
+        # Only act when the signal comes from the active panel widget
         sender = self.sender()
         if sender is not None and sender is not self._active_widget():
             return
 
-        selected_set = set(indexes)
-        overlays = []
-        for i in range(self._active_widget().board_count):
+        # selected_set = set(indexes)
+        boards = []
+        # for i in range(self._active_widget().board_count):
+        for i in indexes:
             data = self._active_widget().board_scene_data(i)
             if data is None:
                 continue
-            cx, cy, w, h, rot, svg = data
-            overlays.append((i, cx, cy, w, h, rot, svg, i in selected_set))
+            # cx, cy, w, h, rot, svg = data
+            # boards.append((i, cx, cy, w, h, rot, svg, i in selected_set))
+            boards.append((i, data))
 
-        if overlays:
-            self.boards_highlighted.emit(overlays)
-        else:
-            try:
-                is_manual = self._model.get("layout", "type") == "manual"
-            except KeyError:
-                is_manual = False
-            if is_manual:
-                self.board_deselected.emit()
+        # if boards:
+        self.boards_selected.emit(boards)
+        # else:
+        #     try:
+        #         is_manual = self._model.get("layout", "type") == "manual"
+        #     except KeyError:
+        #         is_manual = False
+        #     if is_manual:
+        #         self.layout_type_changed.emit()
 
     # ------------------------------------------------------------------
     # Refresh
     # ------------------------------------------------------------------
 
     def _refresh(self) -> None:
+        # Read the current layout type from the model
         try:
             layout_type = str(self._model.get("layout", "type"))
         except KeyError:
@@ -216,9 +225,12 @@ class LayoutPanel(QWidget):
 
         self._refreshing = True
         try:
+            # Select the current type in the combo list (if we can find it)
             idx = self._type_combo.findText(layout_type)
             if idx >= 0:
                 self._type_combo.setCurrentIndex(idx)
+
+            # Enable the associated form widget
             self._grid_widget.setVisible(layout_type == "grid")
             self._table_widget.setVisible(layout_type == "manual")
         finally:
@@ -233,6 +245,6 @@ class LayoutPanel(QWidget):
                 positions = []
             restored = self._table_widget.refresh(positions)
             if not restored:
-                self._on_selection_changed([])
+                self._on_widget_selection_changed([])
         else:
             self._grid_widget.refresh()

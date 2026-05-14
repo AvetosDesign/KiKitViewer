@@ -14,7 +14,8 @@ from PySide6.QtWidgets import (
 
 from kikit_viewer.config.model import ConfigModel
 from kikit_viewer.config.schema import LAYOUT_FIELDS
-from kikit_viewer.ui.params._layout_geometry import content_rect_for_positions, panel_origin as _panel_origin
+from kikit_viewer.ui.canvas.board_overlay_item import BoardSceneData
+from kikit_viewer.ui.params._layout_geometry import panel_origin as _panel_origin
 
 # Fields shown in the grid form (in order)
 _GRID_KEYS = ["rows", "cols", "vspace", "hspace", "rotation", "alternation"]
@@ -33,9 +34,9 @@ class GridLayoutWidget(QWidget):
 
     board_highlighted = Signal(str, float, float, float, float, float)  # svg, x, y, w, h, rot
     positions_changed = Signal()
-    selection_changed = Signal(list)   # list[int] raster-scan indices
-    hovered = Signal(int)              # declared for API parity; never emitted
-    hover_cleared = Signal()           # declared for API parity; never emitted
+    selection_changed = Signal(list)  # list[int] raster-scan indices
+    hovered = Signal(int)  # declared for API parity; never emitted
+    hover_cleared = Signal()  # declared for API parity; never emitted
 
     def __init__(self, model: ConfigModel, parent=None) -> None:
         super().__init__(parent)
@@ -126,11 +127,13 @@ class GridLayoutWidget(QWidget):
                 flip_row = (r % 2 == 1) and alternation in ("rows", "rowsCols")
                 flip_col = (c % 2 == 1) and alternation in ("cols", "rowsCols")
                 extra = 180.0 if (flip_row ^ flip_col) else 0.0
-                positions.append({
-                    "x": round(c * (bw + hspace), 3),
-                    "y": round(r * (bh + vspace), 3),
-                    "rotation": round(rotation + extra, 3),
-                })
+                positions.append(
+                    {
+                        "x": round(c * (bw + hspace), 3),
+                        "y": round(r * (bh + vspace), 3),
+                        "rotation": round(rotation + extra, 3),
+                    }
+                )
         return positions
 
     def panel_origin(self) -> tuple[float, float] | None:
@@ -142,7 +145,7 @@ class GridLayoutWidget(QWidget):
             return None
         return _panel_origin(self._model, positions, bw, bh)
 
-    def board_scene_data(self, index: int) -> tuple[float, float, float, float, float, str] | None:
+    def board_scene_data(self, index: int) -> BoardSceneData | None:
         """Return (scene_cx, scene_cy, w_mm, h_mm, rotation_deg, svg), or None."""
         pos_data = self.get(index)
         if pos_data is None:
@@ -155,7 +158,7 @@ class GridLayoutWidget(QWidget):
         ox, oy = origin
         bw, bh = self._board_size
         x, y, rot = pos_data
-        return x - ox, y - oy, bw, bh, rot, self._edge_cuts_svg or ""
+        return (x - ox, y - oy, bw, bh, rot, self._edge_cuts_svg or "")
 
     # ------------------------------------------------------------------
     # Public API (mirrors TableLayoutWidget)

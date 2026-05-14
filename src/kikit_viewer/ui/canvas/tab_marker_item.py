@@ -6,7 +6,6 @@ from PySide6.QtCore import QLineF, QRectF, Qt, QTimer, Signal
 from PySide6.QtGui import QBrush, QColor, QPen
 from PySide6.QtWidgets import QGraphicsItem, QGraphicsObject
 
-
 _RADIUS_PX = 5    # circle radius in screen pixels
 _ARROW_PX  = 17   # arrow tip distance from centre in screen pixels
 

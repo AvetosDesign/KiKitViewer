@@ -15,6 +15,7 @@ from PySide6.QtWidgets import (
 )
 
 from kikit_viewer.config.model import ConfigModel
+from kikit_viewer.ui.canvas.board_overlay_item import BoardSceneData
 from kikit_viewer.ui.params._layout_geometry import panel_origin as _panel_origin
 
 
@@ -80,9 +81,9 @@ class TableLayoutWidget(QWidget):
     """
 
     positions_changed = Signal()
-    selection_changed = Signal(list)   # list[int] of selected indices
-    hovered = Signal(int)              # mouse entered a row
-    hover_cleared = Signal()           # mouse left the viewport
+    selection_changed = Signal(list)  # list[int] of selected indices
+    hovered = Signal(int)  # mouse entered a row
+    hover_cleared = Signal()  # mouse left the viewport
 
     def __init__(self, model: ConfigModel, parent=None) -> None:
         super().__init__(parent)
@@ -146,7 +147,7 @@ class TableLayoutWidget(QWidget):
             positions = []
         return _panel_origin(self._model, positions, w, h)
 
-    def board_scene_data(self, index: int) -> tuple[float, float, float, float, float, str] | None:
+    def board_scene_data(self, index: int) -> BoardSceneData | None:
         """Return (scene_cx, scene_cy, w_mm, h_mm, rotation_deg, svg), or None."""
         row_data = self.get(index)
         if row_data is None:
@@ -159,7 +160,7 @@ class TableLayoutWidget(QWidget):
         ox, oy = origin
         w, h = self._board_size
         x, y, rot = row_data
-        return x - ox, y - oy, w, h, rot, self._edge_cuts_svg or ""
+        return (x - ox, y - oy, w, h, rot, self._edge_cuts_svg or "")
 
     # ------------------------------------------------------------------
     # Public API

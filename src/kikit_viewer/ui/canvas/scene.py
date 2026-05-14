@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import math
 import re
 from pathlib import Path
 from typing import Any
@@ -20,32 +19,39 @@ from kikit_viewer.ui.canvas.fiducial_handle_item import (
 from kikit_viewer.ui.canvas.fiducial_handle_item import (
     corners_for_type as fiducial_corners_for_type,
 )
+from kikit_viewer.ui.canvas.text_handle_item import TextHandleItem
 from kikit_viewer.ui.canvas.tooling_handle_item import (
     ToolingHandleItem,
 )
 from kikit_viewer.ui.canvas.tooling_handle_item import (
     corners_for_type as tooling_corners_for_type,
 )
-from kikit_viewer.ui.canvas.text_handle_item import TextHandleItem
 
 # Qt 6 SVG renderer assumes 96 DPI; 1 px = this many mm
 _MM_PER_PX = 25.4 / 96.0
 
 
-class _HoverItem(QGraphicsObject):
-    """Dim, non-interactive board outline preview for hover highlighting."""
+class _FloatItem(QGraphicsObject):
+    """Dim, non-interactive board outline preview for float positioning."""
 
-    def __init__(self, w_mm: float, h_mm: float, color: str = "#ffffff") -> None:
+    def __init__(
+        self,
+        w_mm: float,
+        h_mm: float,
+        color: str = "#ffffff",
+        opacity: float = 0.4,
+        zvalue: int = 140,
+    ) -> None:
         super().__init__()
         self._w = w_mm
         self._h = h_mm
         self._color = color
         self._fallback = False
+        self.setZValue(zvalue)
+        self.setOpacity(opacity)
+        self.setCursor(Qt.CursorShape.ArrowCursor)
         self.setFlag(QGraphicsItem.GraphicsItemFlag.ItemIsMovable, False)
         self.setFlag(QGraphicsItem.GraphicsItemFlag.ItemIsSelectable, False)
-        self.setZValue(140)
-        self.setOpacity(0.4)
-        self.setCursor(Qt.CursorShape.ArrowCursor)
 
     def enable_fallback_rect(self) -> None:
         self._fallback = True
@@ -69,9 +75,9 @@ class _HoverItem(QGraphicsObject):
 # Back-to-front draw order — unlisted layers are appended after.
 # Inner copper layers sit between B_Cu and F_Cu; up to 30 are supported.
 _LAYER_ORDER = (
-    ["B_Cu", "B_Mask", "B_Paste", "B_Fab", "B_Silkscreen"]
+    ["Edge_Cuts", "B_Fab", "B_Silkscreen", "B_Paste", "B_Mask", "B_Cu"]
     + [f"In{i}_Cu" for i in range(30, 0, -1)]
-    + ["F_Cu", "F_Mask", "F_Paste", "F_Fab", "F_Silkscreen", "Edge_Cuts"]
+    + ["F_Cu", "F_Mask", "F_Paste", "F_Silkscreen", "F_Fab"]
 )
 
 
@@ -95,9 +101,9 @@ class PanelScene(QGraphicsScene):
 
     text_offset_changed = Signal(float, float)  # hoffset, voffset
 
-    layers_loaded = Signal(list)   # list[str] of layer names after each render
+    layers_loaded = Signal(list)  # list[str] of layer names after each render
     panel_size_changed = Signal(float, float)  # panel width_mm, height_mm (0,0 = none)
-    boards_positions_updated = Signal(object)  # dict[int, tuple[float,float,float]] (cx,cy,rot)
+    board_positions_updated = Signal(object)  # dict[int, tuple[float,float,float]] (cx,cy,rot)
 
     def __init__(self, parent=None) -> None:
         super().__init__(parent)
@@ -108,15 +114,12 @@ class PanelScene(QGraphicsScene):
         self._panel_rect: QRectF | None = None
         self._layer_items: dict[str, QGraphicsSvgItem] = {}
         # Board overlay items (persistent per-board handles)
-        self._overlay_items: dict[int, BoardOverlayItem] = {}
-        self._drag_snapshots: dict[int, QPointF] = {}
+        self._overlay_items: list[BoardOverlayItem] = []
+        self._drag_snapshots: list[QPointF] = []
         self._drag_emit_pending: bool = False
-        # Hover overlay
-        self._hover_item: _HoverItem | None = None
-        self._hover_renderer: QSvgRenderer | None = None
-        self._partition_line_items: list = []
+        # self._partition_line_items: list = []
         # Float overlays (paste float mode)
-        self._float_items: list[_HoverItem] = []
+        self._float_items: list[_FloatItem] = []
         self._float_renderers: list[QSvgRenderer] = []
         self._float_origins: list[tuple[float, float]] = []
         self._float_ref_cx: float = 0.0
@@ -126,30 +129,26 @@ class PanelScene(QGraphicsScene):
             "B_Fab": False,
         }
 
-    def load_panel(
+    def load_pcb_panel(
         self,
         panel_path: Path,
         config: dict[str, dict[str, Any]] | None = None,
-        svgs: dict[str, str] | None = None,
+        layers: dict[str, str] | None = None,
     ) -> None:
         """Render the panel PCB and replace all items in the scene."""
         self.clear()
         self._svg_renderers.clear()
         self._layer_items.clear()
         self._panel_rect = None
-        self._overlay_items.clear()
+        # self._overlay_items.clear()
         self._drag_snapshots.clear()
         self._drag_emit_pending = False
-        self._hover_item = None
-        self._hover_renderer = None
-        self._partition_line_items.clear()
+        # self._partition_line_items.clear()
         self._float_items.clear()
         self._float_renderers.clear()
         self._float_origins.clear()
 
-        if svgs is not None:
-            layers = svgs
-        else:
+        if layers is None:
             try:
                 layers = self._pcb_renderer.render_layers(panel_path)
             except Exception:
@@ -162,11 +161,11 @@ class PanelScene(QGraphicsScene):
         panel_h: float | None = None
 
         for z, layer_name in enumerate(ordered):
-            svg_content = layers[layer_name]
+            layer_content = layers[layer_name]
             color = self._layer_colors.get(layer_name, "#888888")
-            svg_content = _colorize_svg(svg_content, color)
+            layer_content = _colorize_svg(layer_content, color)
 
-            renderer = QSvgRenderer(QByteArray(svg_content.encode("utf-8")))
+            renderer = QSvgRenderer(QByteArray(layer_content.encode("utf-8")))
             if not renderer.isValid():
                 continue
 
@@ -177,8 +176,8 @@ class PanelScene(QGraphicsScene):
             item.setZValue(float(z))
             item.setOpacity(0.85)
 
-            svg_w_mm = _parse_svg_dim_mm(svg_content, "width")
-            svg_h_mm = _parse_svg_dim_mm(svg_content, "height")
+            svg_w_mm = _parse_svg_dim_mm(layer_content, "width")
+            svg_h_mm = _parse_svg_dim_mm(layer_content, "height")
             default_w = renderer.defaultSize().width()
             scale = (svg_w_mm / default_w) if (svg_w_mm and default_w > 0) else _MM_PER_PX
             item.setScale(scale)
@@ -187,8 +186,9 @@ class PanelScene(QGraphicsScene):
             self._layer_items[layer_name] = item
             self.addItem(item)
 
-            # Calculate panel width/height by deducting line width from
-            # the SVG width and height
+            # Emperical: Calculate panel width/height by deducting line width
+            # from the SVG width and height so the status bar gives the
+            # correct dimensions.
             if panel_w is None and svg_w_mm:
                 panel_w = svg_w_mm - 0.1
             if panel_h is None and svg_h_mm:
@@ -225,103 +225,97 @@ class PanelScene(QGraphicsScene):
         self._svg_renderers.clear()
         self._layer_items.clear()
         self._panel_rect = None
-        self._overlay_items.clear()
+        # self._overlay_items.clear()
         self._drag_snapshots.clear()
         self._drag_emit_pending = False
-        self._hover_item = None
-        self._hover_renderer = None
-        self._partition_line_items.clear()
+        # self._partition_line_items.clear()
         self._float_items.clear()
         self._float_renderers.clear()
         self._float_origins.clear()
         self.panel_size_changed.emit(0.0, 0.0)
 
-    def draw_partition_lines(self, centroids_mm: list[tuple[float, float]]) -> None:
-        """Draw Voronoi partition lines in yellow for debugging tab placement."""
-        for item in self._partition_line_items:
-            self.removeItem(item)
-        self._partition_line_items.clear()
+    #  def draw_partition_lines(self, centroids_mm: list[tuple[float, float]]) -> None:
+    #      """Draw Voronoi partition lines in yellow for debugging tab placement."""
+    #      for item in self._partition_line_items:
+    #          self.removeItem(item)
+    #      self._partition_line_items.clear()
 
-        if len(centroids_mm) < 2 or self._panel_rect is None:
-            return
+    #      if len(centroids_mm) < 2 or self._panel_rect is None:
+    #          return
 
-        try:
-            from shapely.geometry import MultiPoint
-            from shapely.ops import voronoi_diagram
-            from shapely.geometry import box
-            from PySide6.QtGui import QPainterPath
-            from PySide6.QtWidgets import QGraphicsPathItem
+    #      try:
+    #          from PySide6.QtGui import QPainterPath
+    #          from PySide6.QtWidgets import QGraphicsPathItem
+    #          from shapely.geometry import MultiPoint, box
+    #          from shapely.ops import voronoi_diagram
 
-            r = self._panel_rect
-            envelope = box(r.left() - 10, r.top() - 10,
-                           r.right() + 10, r.bottom() + 10)
-            mp = MultiPoint(centroids_mm)
-            regions = voronoi_diagram(mp, envelope=envelope)
+    #          r = self._panel_rect
+    #          envelope = box(r.left() - 10, r.top() - 10, r.right() + 10, r.bottom() + 10)
+    #          mp = MultiPoint(centroids_mm)
+    #          regions = voronoi_diagram(mp, envelope=envelope)
 
-            pen = QPen(QColor("#ffff00"))
-            pen.setCosmetic(True)
-            pen.setWidthF(1.5)
+    #          pen = QPen(QColor("#ffff00"))
+    #          pen.setCosmetic(True)
+    #          pen.setWidthF(1.5)
 
-            for region in regions.geoms:
-                coords = list(region.exterior.coords)
-                path = QPainterPath()
-                path.moveTo(coords[0][0], coords[0][1])
-                for x, y in coords[1:]:
-                    path.lineTo(x, y)
-                path.closeSubpath()
-                item = QGraphicsPathItem(path)
-                item.setPen(pen)
-                item.setBrush(Qt.BrushStyle.NoBrush)
-                item.setZValue(100)  # above panel layers, below highlight (150) and markers (200)
-                self.addItem(item)
-                self._partition_line_items.append(item)
-        except Exception:
-            pass
+    #          for region in regions.geoms:
+    #              coords = list(region.exterior.coords)
+    #              path = QPainterPath()
+    #              path.moveTo(coords[0][0], coords[0][1])
+    #              for x, y in coords[1:]:
+    #                  path.lineTo(x, y)
+    #              path.closeSubpath()
+    #              item = QGraphicsPathItem(path)
+    #              item.setPen(pen)
+    #              item.setBrush(Qt.BrushStyle.NoBrush)
+    #              item.setZValue(100)  # above panel layers, below highlight (150) and markers (200)
+    #              self.addItem(item)
+    #              self._partition_line_items.append(item)
+    #      except Exception:
+    #          pass
 
     # ------------------------------------------------------------------
     # Board overlay management
     # ------------------------------------------------------------------
 
-    def add_overlay(self, item: BoardOverlayItem) -> None:
-        self._overlay_items[item.board_id] = item
-        self.addItem(item)
+    # def add_overlay(self, item: BoardOverlayItem) -> None:
+    #     self._overlay_items[item.board_id] = item
+    #     self.addItem(item)
 
-    def remove_overlay(self, board_id: int) -> None:
-        item = self._overlay_items.pop(board_id, None)
-        if item is not None:
-            item.clear_tabs()
-            self.removeItem(item)
+    # def remove_overlay(self, board_id: int) -> None:
+    #     item = self._overlay_items.pop(board_id, None)
+    #     if item is not None:
+    #         item.clear_tabs()
+    #         self.removeItem(item)
 
-    def clear_overlays(self) -> None:
-        for item in list(self._overlay_items.values()):
-            item.clear_tabs()
-            self.removeItem(item)
-        self._overlay_items.clear()
+    # def clear_overlays(self) -> None:
+    #     for item in list(self._overlay_items):
+    #         item.clear_tabs()
+    #         self.removeItem(item)
+    #     self._overlay_items.clear()
 
-    def overlay(self, board_id: int) -> BoardOverlayItem | None:
-        return self._overlay_items.get(board_id)
+    # def overlay(self, board_id: int) -> BoardOverlayItem | None:
+    #     return self._overlay_items[board_id]
 
     def mousePressEvent(self, event) -> None:
         # Snapshot overlay positions before any drag for multi-board move detection.
-        self._drag_snapshots = {
-            bid: QPointF(item.pos()) for bid, item in self._overlay_items.items()
-        }
+        self._drag_snapshots = [QPointF(item.pos()) for item in self._overlay_items]
         super().mousePressEvent(event)
 
     def _on_overlay_position_changed(self, board_id: int, cx: float, cy: float) -> None:
         if self._drag_emit_pending:
             return
         moves: dict[int, tuple[float, float, float]] = {}
-        for bid, item in self._overlay_items.items():
-            snap = self._drag_snapshots.get(bid)
+        for item in self._overlay_items:
+            snap = self._drag_snapshots.get(item.board_id)
             cur = item.pos()
             if snap is not None and (
                 abs(cur.x() - snap.x()) > 0.001 or abs(cur.y() - snap.y()) > 0.001
             ):
-                moves[bid] = (cur.x(), cur.y(), -item.rotation() or 0.0)
+                moves[item.board_id] = (cur.x(), cur.y(), -item.rotation() or 0.0)
         if moves:
             self._drag_emit_pending = True
-            self.boards_positions_updated.emit(moves)
+            self.board_positions_updated.emit(moves)
             QTimer.singleShot(0, self._reset_drag_pending)
 
     def _reset_drag_pending(self) -> None:
@@ -329,48 +323,8 @@ class PanelScene(QGraphicsScene):
 
     def select_tab_marker(self, idx: int) -> None:
         """Select the tab marker at idx across all overlay items."""
-        for item in self._overlay_items.values():
+        for item in self._overlay_items:
             item.select_tab_marker(idx)
-
-    def hover_board(
-        self,
-        scene_cx: float,
-        scene_cy: float,
-        w_mm: float,
-        h_mm: float,
-        rotation_deg: float,
-        edge_cuts_svg: str = "",
-    ) -> None:
-        """Show a dim non-interactive preview overlay. Does not affect board overlays."""
-        self.clear_board_hover()
-        container = _HoverItem(w_mm, h_mm)
-        container.setPos(scene_cx, scene_cy)
-        container.setRotation(-rotation_deg)
-        self.addItem(container)
-        self._hover_item = container
-        if edge_cuts_svg:
-            colored = _set_stroke_width(_colorize_svg(edge_cuts_svg, "#ffffff"), 0.25)
-            renderer = QSvgRenderer(QByteArray(colored.encode("utf-8")))
-            if renderer.isValid():
-                default_w = renderer.defaultSize().width()
-                svg_w = _parse_svg_dim_mm(colored, "width") or w_mm
-                scale = (svg_w / default_w) if default_w > 0 else _MM_PER_PX
-                child = QGraphicsSvgItem()
-                child.setParentItem(container)
-                child.setSharedRenderer(renderer)
-                child.setScale(scale)
-                child.setPos(-w_mm / 2.0, -h_mm / 2.0)
-                self._hover_renderer = renderer
-            else:
-                container.enable_fallback_rect()
-        else:
-            container.enable_fallback_rect()
-
-    def clear_board_hover(self) -> None:
-        if self._hover_item is not None:
-            self.removeItem(self._hover_item)
-            self._hover_item = None
-        self._hover_renderer = None
 
     # ------------------------------------------------------------------
     # Float overlays (copy/paste float mode)
@@ -410,9 +364,7 @@ class PanelScene(QGraphicsScene):
             self._float_origins.append((sx - ref_cx, sy - ref_cy))
             rot = float(entry.get("rotation", 0.0))
 
-            item = _HoverItem(w_mm, h_mm, color="#88ff88")
-            item.setOpacity(0.5)
-            item.setZValue(160)
+            item = _FloatItem(w_mm, h_mm, color="#88ff88", opacity=0.5, zvalue=160)
             item.setPos(sx, sy)
             item.setRotation(-rot)
             item.setCursor(Qt.CursorShape.CrossCursor)
@@ -458,58 +410,48 @@ class PanelScene(QGraphicsScene):
         self._float_renderers.clear()
         self._float_origins.clear()
 
+    def _rotate_group(self, degrees: float, items: list) -> None:
+        """Rotate a list of QGraphicsItems about their collective center."""
+        group = self.createItemGroup(items)
+        center = group.boundingRect().center()
+        group.setTransformOriginPoint(center)
+        group.setRotation(-degrees)
+        self.destroyItemGroup(group)
+
     def rotate_float_overlays(self, degrees: float) -> None:
-        """Rotate the float group around the centroid of all items' bounding boxes."""
+        """Rotate the float group around its collective center."""
         if not self._float_items:
             return
-        union = self._float_items[0].sceneBoundingRect()
-        for item in self._float_items[1:]:
-            union = union.united(item.sceneBoundingRect())
-        cx, cy = union.center().x(), union.center().y()
 
-        # Recover current cursor so origins can be kept consistent
         cursor_x = self._float_items[0].pos().x() - self._float_origins[0][0]
         cursor_y = self._float_items[0].pos().y() - self._float_origins[0][1]
 
-        rad = math.radians(degrees)
-        cos_a, sin_a = math.cos(rad), math.sin(rad)
-        new_origins: list[tuple[float, float]] = []
-        for item, (off_x, off_y) in zip(self._float_items, self._float_origins):
-            p = item.pos()
-            dx, dy = p.x() - cx, p.y() - cy
-            new_x = cx + dx * cos_a - dy * sin_a
-            new_y = cy + dx * sin_a + dy * cos_a
-            item.setPos(new_x, new_y)
-            item.setRotation(item.rotation() - degrees)
-            new_origins.append((new_x - cursor_x, new_y - cursor_y))
-        self._float_origins[:] = new_origins
+        # Rotate as a list of HoverItems (QGraphicsObjects)
+        self._rotate_group(degrees, self._float_items)
+
+        # Update our internal origin cache
+        self._float_origins[:] = [
+            (i.pos().x() - cursor_x, i.pos().y() - cursor_y) for i in self._float_items
+        ]
 
     def rotate_board_overlays(self, degrees: float) -> None:
-        """Rotate selected board overlays as a group around their bounding box centroid.
-
-        Emits boards_positions_updated with updated (cx, cy, rotation) for each moved board.
         """
-        selected = {bid: item for bid, item in self._overlay_items.items() if item.isSelected()}
+        Rotate selected board overlays as a group.
+        Emits board_positions_updated with new (cx, cy, rot) for each moved board.
+        """
+        selected = {item for item in self._overlay_items if item.isSelected()}
         if not selected:
             return
-        items_list = list(selected.values())
-        union = items_list[0].sceneBoundingRect()
-        for item in items_list[1:]:
-            union = union.united(item.sceneBoundingRect())
-        cx, cy = union.center().x(), union.center().y()
 
-        rad = math.radians(degrees)
-        cos_a, sin_a = math.cos(rad), math.sin(rad)
+        # Rotate as a list of BoardOverlayItems (QGraphicsObjects)
+        self._rotate_group(degrees, list(selected))
+
+        # Notify the system about the moves
         moves: dict[int, tuple[float, float, float]] = {}
-        for bid, item in selected.items():
+        for item in selected:
             p = item.pos()
-            dx, dy = p.x() - cx, p.y() - cy
-            new_x = cx + dx * cos_a - dy * sin_a
-            new_y = cy + dx * sin_a + dy * cos_a
-            item.setPos(new_x, new_y)
-            item.setRotation(item.rotation() - degrees)
-            moves[bid] = (new_x, new_y, -item.rotation() or 0.0)
-        self.boards_positions_updated.emit(moves)
+            moves[item.board_id] = (p.x(), p.y(), degrees - item.rotation() or 0.0)
+        self.board_positions_updated.emit(moves)
 
     # ------------------------------------------------------------------
     # Handle placement
@@ -552,7 +494,7 @@ class PanelScene(QGraphicsScene):
         if str(text_cfg.get("type", "none")) not in ("simple", "scripted"):
             return
 
-        anchor  = str(text_cfg.get("anchor",  "tl"))
+        anchor = str(text_cfg.get("anchor", "tl"))
         hoffset = float(text_cfg.get("hoffset", 0.0))
         voffset = float(text_cfg.get("voffset", 0.0))
 
