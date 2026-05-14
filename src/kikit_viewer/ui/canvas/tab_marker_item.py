@@ -39,7 +39,6 @@ class TabMarkerItem(QGraphicsObject):
         self._angle_deg = angle_deg
         self._drag_start = None
 
-        self.setFlag(QGraphicsItem.GraphicsItemFlag.ItemIgnoresTransformations)
         self.setFlag(QGraphicsItem.GraphicsItemFlag.ItemIsMovable)
         self.setFlag(QGraphicsItem.GraphicsItemFlag.ItemIsSelectable)
         self.setAcceptHoverEvents(True)

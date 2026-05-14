@@ -26,6 +26,7 @@ class PcbPanelView(QGraphicsView):
     float_committed = Signal(float, float)  # scene x_mm, y_mm — left-click commits paste
     float_cancelled = Signal()  # Escape or right-click cancels paste
     rotate_requested = Signal(int)  # CCW positive
+    zoom_changed = Signal(float)  # current view scale factor (transform().m11())
 
     _ROTATE_INCREMENT = 90
 
@@ -154,10 +155,14 @@ class PcbPanelView(QGraphicsView):
     # Zoom
     # ------------------------------------------------------------------
 
+    def _emit_zoom(self) -> None:
+        self.zoom_changed.emit(self.transform().m11())
+
     def wheelEvent(self, event: QWheelEvent) -> None:
         if event.modifiers() & Qt.KeyboardModifier.ControlModifier:
             factor = 1.15 if event.angleDelta().y() > 0 else 1.0 / 1.15
             self.scale(factor, factor)
+            self._emit_zoom()
             event.accept()
         else:
             super().wheelEvent(event)
@@ -196,9 +201,11 @@ class PcbPanelView(QGraphicsView):
 
     def zoom_in(self) -> None:
         self.scale(1.15, 1.15)
+        self._emit_zoom()
 
     def zoom_out(self) -> None:
         self.scale(1.0 / 1.15, 1.0 / 1.15)
+        self._emit_zoom()
 
     def fit_panel(self) -> None:
         """Fit all scene content in the viewport with a small margin."""
@@ -209,3 +216,4 @@ class PcbPanelView(QGraphicsView):
             return
         rect.adjust(-5, -5, 5, 5)
         self.fitInView(rect, Qt.AspectRatioMode.KeepAspectRatio)
+        self._emit_zoom()

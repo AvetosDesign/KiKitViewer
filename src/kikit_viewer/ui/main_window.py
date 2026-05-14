@@ -138,6 +138,7 @@ class MainWindow(QMainWindow):
         self._view.cursor_moved.connect(self._on_cursor_moved)
         self._view.cursor_left.connect(self._on_canvas_cursor_left)
         self._view.canvas_clicked.connect(self._on_canvas_clicked)
+        self._view.zoom_changed.connect(self._on_zoom_changed)
 
         self._coordinator.run_started.connect(self._on_run_started)
         self._coordinator.run_finished.connect(self._on_run_finished)
@@ -503,6 +504,10 @@ class MainWindow(QMainWindow):
         self._cursor_label.clear()
         self._on_board_hover_cleared()
 
+    def _on_zoom_changed(self, scale: float) -> None:
+        for olay in self._overlay_items:
+            olay.set_view_scale(scale)
+
     def _on_overlay_tapped(self, board_id: int, modifiers) -> None:
         """Clean click (no drag) on a board overlay in Layout mode — update table selection."""
         if modifiers and (modifiers & Qt.KeyboardModifier.ControlModifier):
@@ -762,15 +767,6 @@ class MainWindow(QMainWindow):
             self._scene.rotate_board_overlays(degrees)
 
     # ------------------------------------------------------------------
-    # Run coordinator slots
-    # ------------------------------------------------------------------
-
-    # def _on_layout_type_change(self) -> None:
-    #     #self._tab_target_id = None
-    #     self._scene.clear_overlays()
-    #     # self._overlay_items.clear()
-
-    # ------------------------------------------------------------------
     # OverlayOwner interface (called by BoardOverlayItem.apply_context)
     # ------------------------------------------------------------------
 
@@ -781,12 +777,12 @@ class MainWindow(QMainWindow):
             return []
 
     def is_first(self, board_id: int) -> bool:
+        # Start with "Are we the tab target?"
         if self._tab_target_id is not None:
             return board_id == self._tab_target_id
-        if self._overlay_items:
-            # TODO: Update this
-            return board_id == 0
-        return False
+        # Next check to see if we are the first of a selection
+        selected = self._layout_panel.selected
+        return board_id == (selected[0] if selected else 0)
 
     def manual_tabs(self) -> bool:
         try:
@@ -865,6 +861,9 @@ class MainWindow(QMainWindow):
             brd_data: BoardEntry = (i, self._layout_panel.board_scene_data(i))
             olay = BoardOverlayItem(brd_data, self, outline=self._board_outline)
             self._scene.addItem(olay)
+            olay.set_view_scale(self._view.transform().m11())
+            
+            # Connect the overlay to our signals
             olay.position_changed.connect(self._scene._on_overlay_position_changed)
             olay.overlay_tapped.connect(self._on_overlay_tapped)
             olay.tapped.connect(self._on_tab_tapped)
@@ -872,16 +871,21 @@ class MainWindow(QMainWindow):
             olay.tab_deleted.connect(self._on_tab_deleted)
             olay.tab_hovered.connect(self._on_tab_marker_hovered)
 
+            # Connect to the overlay's signals
             self.opmode_changed.connect(olay.set_opmode)
             self._layout_panel.layout_type_changed.connect(olay.refresh_context)
             self._model.config_changed.connect(olay.refresh_context)
 
+            # Add the board overlay to our list
             self._overlay_items.append(olay)
+
+        # Sync new overlays to the currently active param tab before restoring highlight
+        self.opmode_changed.emit(self.opMode())
 
         if self._auto_fit_btn.isChecked():
             self._view.fit_panel()
         self._layout_panel.restore_highlight()
-        # self._refresh_overlay_context()
+        
         self._update_debug_dock()
         self._set_status("Panel updated")
 
@@ -957,6 +961,11 @@ class MainWindow(QMainWindow):
     def _on_tab_tapped(
         self, board_id: int, local_x: float, local_y: float, angle_deg: float
     ) -> None:
+        if self._tab_target_id != board_id:
+            self._tab_target_id = board_id
+            for olay in self._overlay_items:
+                olay.refresh_context()
+            return
         positions = list(self._model.get("tabs", "positions") or [])
         positions.append(
             {

@@ -35,7 +35,9 @@ class _HighlightPolygon(QGraphicsPolygonItem):
         self.setOpacity(opac)
         self.setFlag(QGraphicsItem.GraphicsItemFlag.ItemIsMovable, False)
         self.setFlag(QGraphicsItem.GraphicsItemFlag.ItemIsSelectable, False)
+        self.setAcceptedMouseButtons(Qt.MouseButton.NoButton)
         self.setAcceptHoverEvents(hover)
+        self.setPen(QPen(QColor("transparent")))
 
     def hoverEnterEvent(self, event):
         """Update appearance on hover."""
@@ -80,6 +82,7 @@ class BoardOverlayItem(QGraphicsObject):
         self._drag_start = None
         self._press_modifiers = Qt.KeyboardModifier.NoModifier
         self._tab_markers: list[TabMarkerItem] = []
+        self._view_scale: float = 1.0
         self._svg_renderer: QSvgRenderer | None = None
         self._opmode = "layout"
 
@@ -144,6 +147,12 @@ class BoardOverlayItem(QGraphicsObject):
     #         self._fallback = False
     #         self._color = color
 
+    def set_view_scale(self, scale: float) -> None:
+        """Update the counter-scale applied to tab markers so they stay fixed screen-size."""
+        self._view_scale = scale
+        for marker in self._tab_markers:
+            marker.setScale(1.0 / scale)
+
     def set_tabs(self, positions: list[dict]) -> None:
         """Replace tab markers in-place. Does not emit any signals."""
         self.clear_tabs()
@@ -158,6 +167,7 @@ class BoardOverlayItem(QGraphicsObject):
             a_deg = float(pos.get("a", 0.0))
             marker = TabMarkerItem(idx, a_deg, parent=self)
             marker.setPos(x_mm, y_mm)
+            marker.setScale(1.0 / self._view_scale)
             marker.moved.connect(self._on_marker_moved)
             marker.delete_requested.connect(self._on_marker_delete_requested)
             marker.hovered.connect(self.tab_hovered)
@@ -186,26 +196,29 @@ class BoardOverlayItem(QGraphicsObject):
         self.clear_tabs()
         self.setCursor(Qt.CursorShape.SizeAllCursor)
         self.setFlag(QGraphicsItem.GraphicsItemFlag.ItemIsMovable, False)
-
-        # Selected highlight
-        if self.isSelected():
-            self._select_highlight.setPen(QPen(QColor("white"), _HIGHLIGHT_WIDTH))
-        else:
-            self._select_highlight.setPen(QPen(QColor("transparent"), _HIGHLIGHT_WIDTH))
+        highlight = False
 
         # Tab mode
-        mainwindow = self._owner
+        mainwin = self._owner
         if self._opmode == "tabs":
             # Show the tabs if we're in manual tab mode
-            if mainwindow.manual_tabs() and mainwindow.is_first(self._board_id):
-                self.set_tabs(mainwindow.get_tab_positions())
+            if mainwin.manual_tabs() and mainwin.is_first(self._board_id):
+                self.set_tabs(mainwin.get_tab_positions())
                 self.setCursor(Qt.CursorShape.CrossCursor)
+                highlight = True
 
         # Layout mode
         if self._opmode == "layout":
             # Enable movement if we're in manual mode
-            if mainwindow.manual_layout():
+            if mainwin.manual_layout():
                 self.setFlag(QGraphicsItem.GraphicsItemFlag.ItemIsMovable, True)
+                highlight = self.isSelected()
+
+        # Selected highlight
+        if highlight:
+            self._select_highlight.setPen(QPen(QColor("white"), _HIGHLIGHT_WIDTH))
+        else:
+            self._select_highlight.setPen(QPen(QColor("transparent"), _HIGHLIGHT_WIDTH))
 
     def set_opmode(self, newmode: str) -> None:
         """A slot that is invoked when a parameter tab is selected."""
@@ -234,6 +247,7 @@ class BoardOverlayItem(QGraphicsObject):
             self._outline = QGraphicsPolygonItem(QPolygonF(points), parent=self)
             self._outline.setPen(QPen(QColor("white"), 0.12))
             self._outline.setOpacity(0.3)
+            self._outline.setAcceptedMouseButtons(Qt.MouseButton.NoButton)
 
             # The tab point line is used to position the tabs.  It is just
             # outside the board outline so candidate points won't be inside.
