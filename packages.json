@@ -20,6 +20,21 @@
       },
       "versions": [
         {
+          "version": "1.1.6",
+          "status": "stable",
+          "kicad_version": "8.0",
+          "runtime": "swig",
+          "platforms": [
+            "windows",
+            "linux",
+            "macos"
+          ],
+          "download_url": "https://github.com/AvetosDesign/KiKitViewer/releases/download/v1.1.6/kikit-viewer-1.1.6.zip",
+          "download_sha256": "2cbda5e70d97b71eef4ede7432e3449971857674b63236d8fe0809b24af0ee0e",
+          "download_size": 118524,
+          "install_size": 316615
+        },
+        {
           "version": "1.1.5",
           "status": "stable",
           "kicad_version": "8.0",
