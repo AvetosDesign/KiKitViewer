@@ -24,7 +24,7 @@ from PySide6.QtWidgets import (
 from kikit_viewer.config import serialization, translation
 from kikit_viewer.config.model import ConfigModel
 from kikit_viewer.runner.run_coordinator import RunCoordinator
-from kikit_viewer.ui.canvas.board_overlay_item import BoardEntry, BoardOverlayItem
+from kikit_viewer.ui.canvas.board_overlay_item import BoardEntry, BoardOverlayItem, BoardSceneData
 from kikit_viewer.ui.canvas.pcb_panel_view import PcbPanelView
 from kikit_viewer.ui.canvas.scene import PanelScene
 from kikit_viewer.ui.debug_dock import DebugGeometryDock
@@ -160,7 +160,7 @@ class MainWindow(QMainWindow):
 
         # Board overlay path
         self._layout_panel.boards_selected.connect(self._on_boards_selected)
-        # self._layout_panel.layout_type_changed.connect(self._on_layout_type_change)
+        self._layout_panel.boards_moved.connect(self._on_boards_selected)
         self._scene.board_positions_updated.connect(self._layout_panel.apply_board_drop)
 
         # Legacy single-board path (grid mode → tabs panel)
@@ -508,6 +508,15 @@ class MainWindow(QMainWindow):
         for olay in self._overlay_items:
             olay.set_view_scale(scale)
 
+    def _on_overlay_position_changed(self, _board_id: int, _cx: float, _cy: float) -> None:
+        moves = {}
+        for olay in self._overlay_items:
+            if olay.isSelected():
+                p = olay.pos()
+                moves[olay.board_id] = (p.x(), p.y(), -olay.rotation() or 0.0)
+        if moves:
+            self._layout_panel.apply_board_drop(moves)
+
     def _on_overlay_tapped(self, board_id: int, modifiers) -> None:
         """Clean click (no drag) on a board overlay in Layout mode — update table selection."""
         if modifiers and (modifiers & Qt.KeyboardModifier.ControlModifier):
@@ -830,11 +839,10 @@ class MainWindow(QMainWindow):
             olay.setSelected(olay.board_id in selected_ids)
             olay.refresh_context()
 
-    def _on_board_highlighted(
-        self, svg: str, x: float, y: float, w: float, h: float, rot: float
-    ) -> None:
-        self._on_boards_selected([(0, (x, y, w, h, rot, svg))])
+    def _on_board_highlighted(self, data: BoardSceneData) -> None:
+        self._on_boards_selected([(0, data)])
 
+    # Run manager
     def _on_run_started(self) -> None:
         self._set_status("Running KiKit…")
 
@@ -864,7 +872,7 @@ class MainWindow(QMainWindow):
             olay.set_view_scale(self._view.transform().m11())
             
             # Connect the overlay to our signals
-            olay.position_changed.connect(self._scene._on_overlay_position_changed)
+            olay.position_changed.connect(self._on_overlay_position_changed)
             olay.overlay_tapped.connect(self._on_overlay_tapped)
             olay.tapped.connect(self._on_tab_tapped)
             olay.tab_moved.connect(self._on_tab_moved)
@@ -889,20 +897,11 @@ class MainWindow(QMainWindow):
         self._update_debug_dock()
         self._set_status("Panel updated")
 
-    def _update_debug_dock(self) -> None:
-        try:
-            from kikit_viewer.plugins import manual_tabs
-
-            dbg = dict(manual_tabs._last_debug_geometries)
-        except Exception:
-            return
-        if dbg:
-            self._debug_dock.show_geometries(**dbg)
-
     def _on_run_failed(self, message: str) -> None:
         self._set_status("KiKit error — see details", error=True)
         QMessageBox.critical(self, "KiKit run failed", message)
 
+    # Fiducial handling
     def _on_fiducials_dragged(self, hoffset: float, voffset: float) -> None:
         self._model.set("fiducials", "hoffset", hoffset)
         self._model.set("fiducials", "voffset", voffset)
@@ -917,13 +916,10 @@ class MainWindow(QMainWindow):
         self._model.set("fiducials", "hoffset", defaults["hoffset"])
         self._model.set("fiducials", "voffset", defaults["voffset"])
 
+    # Tooling handling
     def _on_tooling_dragged(self, hoffset: float, voffset: float) -> None:
         self._model.set("tooling", "hoffset", hoffset)
         self._model.set("tooling", "voffset", voffset)
-
-    def _on_text_dragged(self, hoffset: float, voffset: float) -> None:
-        self._model.set("text", "hoffset", hoffset)
-        self._model.set("text", "voffset", voffset)
 
     def _on_tooling_remove(self) -> None:
         self._model.set("tooling", "type", "none")
@@ -934,6 +930,21 @@ class MainWindow(QMainWindow):
         defaults = {f.key: f.default for f in TOOLING_FIELDS}
         self._model.set("tooling", "hoffset", defaults["hoffset"])
         self._model.set("tooling", "voffset", defaults["voffset"])
+
+    # Text handling
+    def _on_text_dragged(self, hoffset: float, voffset: float) -> None:
+        self._model.set("text", "hoffset", hoffset)
+        self._model.set("text", "voffset", voffset)
+
+    def _update_debug_dock(self) -> None:
+        try:
+            from kikit_viewer.plugins import manual_tabs
+
+            dbg = dict(manual_tabs._last_debug_geometries)
+        except Exception:
+            return
+        if dbg:
+            self._debug_dock.show_geometries(**dbg)
 
     # ------------------------------------------------------------------
     # (PCB) Tab handling slots
@@ -963,6 +974,7 @@ class MainWindow(QMainWindow):
     ) -> None:
         if self._tab_target_id != board_id:
             self._tab_target_id = board_id
+            self._layout_panel.set_selected([board_id])
             for olay in self._overlay_items:
                 olay.refresh_context()
             return

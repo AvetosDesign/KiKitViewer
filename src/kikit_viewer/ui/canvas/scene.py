@@ -4,7 +4,7 @@ import re
 from pathlib import Path
 from typing import Any
 
-from PySide6.QtCore import QByteArray, QPointF, QRectF, Qt, QTimer, Signal
+from PySide6.QtCore import QByteArray, QRectF, Qt, Signal
 from PySide6.QtGui import QColor, QPen
 from PySide6.QtSvg import QSvgRenderer
 from PySide6.QtSvgWidgets import QGraphicsSvgItem
@@ -113,11 +113,6 @@ class PanelScene(QGraphicsScene):
         self._svg_renderers: list[QSvgRenderer] = []
         self._panel_rect: QRectF | None = None
         self._layer_items: dict[str, QGraphicsSvgItem] = {}
-        # Board overlay items (persistent per-board handles)
-        self._overlay_items: list[BoardOverlayItem] = []
-        self._drag_snapshots: list[QPointF] = []
-        self._drag_emit_pending: bool = False
-        # self._partition_line_items: list = []
         # Float overlays (paste float mode)
         self._float_items: list[_FloatItem] = []
         self._float_renderers: list[QSvgRenderer] = []
@@ -140,10 +135,6 @@ class PanelScene(QGraphicsScene):
         self._svg_renderers.clear()
         self._layer_items.clear()
         self._panel_rect = None
-        # self._overlay_items.clear()
-        self._drag_snapshots.clear()
-        self._drag_emit_pending = False
-        # self._partition_line_items.clear()
         self._float_items.clear()
         self._float_renderers.clear()
         self._float_origins.clear()
@@ -225,106 +216,17 @@ class PanelScene(QGraphicsScene):
         self._svg_renderers.clear()
         self._layer_items.clear()
         self._panel_rect = None
-        # self._overlay_items.clear()
-        self._drag_snapshots.clear()
-        self._drag_emit_pending = False
         # self._partition_line_items.clear()
         self._float_items.clear()
         self._float_renderers.clear()
         self._float_origins.clear()
         self.panel_size_changed.emit(0.0, 0.0)
 
-    #  def draw_partition_lines(self, centroids_mm: list[tuple[float, float]]) -> None:
-    #      """Draw Voronoi partition lines in yellow for debugging tab placement."""
-    #      for item in self._partition_line_items:
-    #          self.removeItem(item)
-    #      self._partition_line_items.clear()
-
-    #      if len(centroids_mm) < 2 or self._panel_rect is None:
-    #          return
-
-    #      try:
-    #          from PySide6.QtGui import QPainterPath
-    #          from PySide6.QtWidgets import QGraphicsPathItem
-    #          from shapely.geometry import MultiPoint, box
-    #          from shapely.ops import voronoi_diagram
-
-    #          r = self._panel_rect
-    #          envelope = box(r.left() - 10, r.top() - 10, r.right() + 10, r.bottom() + 10)
-    #          mp = MultiPoint(centroids_mm)
-    #          regions = voronoi_diagram(mp, envelope=envelope)
-
-    #          pen = QPen(QColor("#ffff00"))
-    #          pen.setCosmetic(True)
-    #          pen.setWidthF(1.5)
-
-    #          for region in regions.geoms:
-    #              coords = list(region.exterior.coords)
-    #              path = QPainterPath()
-    #              path.moveTo(coords[0][0], coords[0][1])
-    #              for x, y in coords[1:]:
-    #                  path.lineTo(x, y)
-    #              path.closeSubpath()
-    #              item = QGraphicsPathItem(path)
-    #              item.setPen(pen)
-    #              item.setBrush(Qt.BrushStyle.NoBrush)
-    #              item.setZValue(100)  # above panel layers, below highlight (150) and markers (200)
-    #              self.addItem(item)
-    #              self._partition_line_items.append(item)
-    #      except Exception:
-    #          pass
-
-    # ------------------------------------------------------------------
-    # Board overlay management
-    # ------------------------------------------------------------------
-
-    # def add_overlay(self, item: BoardOverlayItem) -> None:
-    #     self._overlay_items[item.board_id] = item
-    #     self.addItem(item)
-
-    # def remove_overlay(self, board_id: int) -> None:
-    #     item = self._overlay_items.pop(board_id, None)
-    #     if item is not None:
-    #         item.clear_tabs()
-    #         self.removeItem(item)
-
-    # def clear_overlays(self) -> None:
-    #     for item in list(self._overlay_items):
-    #         item.clear_tabs()
-    #         self.removeItem(item)
-    #     self._overlay_items.clear()
-
-    # def overlay(self, board_id: int) -> BoardOverlayItem | None:
-    #     return self._overlay_items[board_id]
-
-    def mousePressEvent(self, event) -> None:
-        # Snapshot overlay positions before any drag for multi-board move detection.
-        self._drag_snapshots = [QPointF(item.pos()) for item in self._overlay_items]
-        super().mousePressEvent(event)
-
-    def _on_overlay_position_changed(self, board_id: int, cx: float, cy: float) -> None:
-        if self._drag_emit_pending:
-            return
-        moves: dict[int, tuple[float, float, float]] = {}
-        for item in self._overlay_items:
-            snap = self._drag_snapshots.get(item.board_id)
-            cur = item.pos()
-            if snap is not None and (
-                abs(cur.x() - snap.x()) > 0.001 or abs(cur.y() - snap.y()) > 0.001
-            ):
-                moves[item.board_id] = (cur.x(), cur.y(), -item.rotation() or 0.0)
-        if moves:
-            self._drag_emit_pending = True
-            self.board_positions_updated.emit(moves)
-            QTimer.singleShot(0, self._reset_drag_pending)
-
-    def _reset_drag_pending(self) -> None:
-        self._drag_emit_pending = False
-
     def select_tab_marker(self, idx: int) -> None:
         """Select the tab marker at idx across all overlay items."""
-        for item in self._overlay_items:
-            item.select_tab_marker(idx)
+        for item in self.items():
+            if isinstance(item, BoardOverlayItem):
+                item.select_tab_marker(idx)
 
     # ------------------------------------------------------------------
     # Float overlays (copy/paste float mode)
@@ -439,18 +341,20 @@ class PanelScene(QGraphicsScene):
         Rotate selected board overlays as a group.
         Emits board_positions_updated with new (cx, cy, rot) for each moved board.
         """
-        selected = {item for item in self._overlay_items if item.isSelected()}
+        from kikit_viewer.ui.canvas.board_overlay_item import BoardOverlayItem
+        selected = [
+            item for item in self.items()
+            if isinstance(item, BoardOverlayItem) and item.isSelected()
+        ]
         if not selected:
             return
 
-        # Rotate as a list of BoardOverlayItems (QGraphicsObjects)
-        self._rotate_group(degrees, list(selected))
+        self._rotate_group(degrees, selected)
 
-        # Notify the system about the moves
-        moves: dict[int, tuple[float, float, float]] = {}
-        for item in selected:
-            p = item.pos()
-            moves[item.board_id] = (p.x(), p.y(), degrees - item.rotation() or 0.0)
+        moves: dict[int, tuple[float, float, float]] = {
+            item.board_id: (item.pos().x(), item.pos().y(), -item.rotation() or 0.0)
+            for item in selected
+        }
         self.board_positions_updated.emit(moves)
 
     # ------------------------------------------------------------------

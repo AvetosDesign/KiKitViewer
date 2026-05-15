@@ -27,7 +27,8 @@ class LayoutPanel(QWidget):
     public method call to the currently-active widget.
     """
 
-    board_highlighted = Signal(str, float, float, float, float, float)
+    board_highlighted = Signal(object)  # BoardSceneData
+    boards_moved = Signal(list)
     boards_selected = Signal(list)
     layout_type_changed = Signal()
     board_hovered = Signal(int)
@@ -176,48 +177,37 @@ class LayoutPanel(QWidget):
         if positions:
             self._model.set("layout", "positions", positions)
 
+    def _build_board_list(self, indexes: list[int]) -> list:
+        """Construct a list of board scene data from a list of indexes."""
+        boards = []
+        for i in indexes:
+            data = self._active_widget().board_scene_data(i)
+            if data is not None:
+                boards.append((i, data))
+        return boards
+
     def _on_widget_positions_changed(self) -> None:
         # Only act when the signal comes from the active widget
         sender = self.sender()
         if sender is not self._active_widget():
             return
-
-        # TODO: This may work, but it isn't good architecture
-        self._on_widget_selection_changed(self._active_widget().selected)
+        boards = self._build_board_list(self._active_widget().selected)
+        self.boards_moved.emit(boards)
 
     def _on_widget_selection_changed(self, indexes: list[int]) -> None:
         # Only act when the signal comes from the active panel widget
         sender = self.sender()
-        if sender is not None and sender is not self._active_widget():
+        if sender is not self._active_widget():
             return
-
-        # selected_set = set(indexes)
-        boards = []
-        # for i in range(self._active_widget().board_count):
-        for i in indexes:
-            data = self._active_widget().board_scene_data(i)
-            if data is None:
-                continue
-            # cx, cy, w, h, rot, svg = data
-            # boards.append((i, cx, cy, w, h, rot, svg, i in selected_set))
-            boards.append((i, data))
-
-        # if boards:
+        boards = self._build_board_list(indexes)
         self.boards_selected.emit(boards)
-        # else:
-        #     try:
-        #         is_manual = self._model.get("layout", "type") == "manual"
-        #     except KeyError:
-        #         is_manual = False
-        #     if is_manual:
-        #         self.layout_type_changed.emit()
 
     # ------------------------------------------------------------------
     # Refresh
     # ------------------------------------------------------------------
 
     def _refresh(self) -> None:
-        # Read the current layout type from the model
+        """ Read the current layout type from the model """
         try:
             layout_type = str(self._model.get("layout", "type"))
         except KeyError:

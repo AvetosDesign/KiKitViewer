@@ -32,7 +32,7 @@ class GridLayoutWidget(QWidget):
         index = row * cols + col
     """
 
-    board_highlighted = Signal(str, float, float, float, float, float)  # svg, x, y, w, h, rot
+    board_highlighted = Signal(object)  # BoardSceneData
     positions_changed = Signal()
     selection_changed = Signal(list)  # list[int] raster-scan indices
     hovered = Signal(int)  # declared for API parity; never emitted
@@ -257,5 +257,4 @@ class GridLayoutWidget(QWidget):
         data = self.board_scene_data(0)
         if data is None:
             return
-        scene_cx, scene_cy, w, h, rot, svg = data
-        self.board_highlighted.emit(svg, scene_cx, scene_cy, w, h, rot)
+        self.board_highlighted.emit(data)
