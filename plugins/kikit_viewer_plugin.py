@@ -82,16 +82,28 @@ def _find_kicad_python() -> str:
 _KICAD_PYTHON = _find_kicad_python()
 
 
+def _is_usable_python(path: Path) -> bool:
+    """Return False for Windows Store stubs and other non-functional Python wrappers."""
+    resolved = str(path.resolve()).replace("\\", "/")
+    return "WindowsApps" not in resolved
+
+
 def _find_python() -> str:
     """
     Locate a Python interpreter that is not KiCad's embedded one.
 
     Priority:
-      1. Project .venv (sibling of src\)
-      2. 'python' on the system PATH that is not inside KiCad's bin
-      3. 'python3' on the system PATH
+      1. KIKITVIEWER_PYTHON environment variable
+      2. Project .venv (sibling of the plugin dir)
+      3. Common fixed install locations (Windows, macOS)
+      4. 'python3' / 'python' on the system PATH (skipping KiCad and Windows Store stubs)
     """
-    # 1. Project venv — Scripts/python.exe on Windows, bin/python on Unix
+    # 1. Explicit override via environment variable
+    override = os.environ.get("KIKITVIEWER_PYTHON")
+    if override and Path(override).exists():
+        return override
+
+    # 2. Project venv — Scripts/python.exe on Windows, bin/python on Unix
     for candidate in (
         _PLUGIN_DIR.parent / ".venv" / "Scripts" / "python.exe",
         _PLUGIN_DIR.parent / ".venv" / "bin" / "python",
@@ -99,32 +111,42 @@ def _find_python() -> str:
         if candidate.exists():
             return str(candidate)
 
-    # 2. Common fixed locations on macOS (Homebrew, pyenv, python.org installer)
-    if sys.platform == "darwin":
+    # 3. Common fixed locations
+    if sys.platform == "win32":
+        localappdata = Path(os.environ.get("LOCALAPPDATA", "C:/Users/Public"))
+        programfiles = Path(os.environ.get("PROGRAMFILES", "C:/Program Files"))
+        candidates: list[Path] = []
+        for version in range(14, 7, -1):  # 3.14 → 3.8
+            tag = f"3{version}" if version >= 10 else f"3{version}"
+            candidates += [
+                localappdata / "Programs" / "Python" / f"Python3{version}" / "python.exe",
+                programfiles / "Python" / f"Python3{version}" / "python.exe",
+                Path(f"C:/Python3{version}/python.exe"),
+            ]
+        for c in candidates:
+            if c.exists() and _is_usable_python(c):
+                return str(c)
+    elif sys.platform == "darwin":
         for candidate in (
-            Path("/opt/homebrew/bin/python3"),  # Apple Silicon Homebrew
-            Path("/usr/local/bin/python3"),  # Intel Homebrew / python.org
-            Path("/usr/bin/python3"),  # macOS system Python
+            Path("/opt/homebrew/bin/python3"),
+            Path("/usr/local/bin/python3"),
+            Path("/usr/bin/python3"),
         ):
             if candidate.exists():
                 return str(candidate)
 
-    # 3. System PATH — skip anything inside the KiCad installation directory tree
+    # 4. System PATH — skip KiCad's tree and Windows Store stubs
     kicad_bin = Path(sys.executable).parent
     for name in ("python3", "python"):
         found = shutil.which(name)
         if found:
             found_path = Path(found).resolve()
-            # Exclude if it lives anywhere inside KiCad's app bundle / install dir
+            if not _is_usable_python(found_path):
+                continue
             try:
                 found_path.relative_to(kicad_bin.parent)
             except ValueError:
                 return found  # not inside KiCad tree — use it
-
-    # Last resort: whatever python.exe lives next to KiCad's own executable
-    kicad_python = kicad_bin / "python.exe"
-    if kicad_python.exists():
-        return str(kicad_python)
 
     return "python"
 
@@ -209,9 +231,9 @@ def _show_missing_deps_error(missing: list[str], python_exe: str) -> None:
         f"  {python_exe}\n\n"
         f"Install them with:\n"
         f"  pip install {pkgs}\n\n"
-        "If the interpreter shown above is not the one you intended, install the\n"
-        "packages into that interpreter, or create a .venv in the KiKitViewer repo\n"
-        "directory with the required packages installed.\n\n"
+        "If the interpreter shown above is not the one you intended, set the\n"
+        "KIKITVIEWER_PYTHON environment variable to the full path of the correct\n"
+        "Python executable and restart KiCad.\n\n"
         "Then restart KiCad."
     )
     try:
