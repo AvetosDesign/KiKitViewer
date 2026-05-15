@@ -28,11 +28,23 @@ pip install PySide6>=6.6 shapely>=2.0 qtawesome>=1.3
 
 ## Installation
 
-### Via KiCad Plugin Content Manager (recommended)
+### Via KiCad Plugin and Content Manager (recommended)
 
-> PCM submission pending. In the meantime, use the manual method below.
+> PCM submission to the official KiCad repository is pending. In the meantime, you can use the unofficial repository, or you can use the manual method below.
 >
 > **Note:** The KiKit plugin (a separate PCM package) must be installed first regardless of which installation method you use.
+
+#### Using the Unofficial Repository
+1. Open the KiCad Plugin and Content Manager tool.
+2. On the Repository tab, click the "Manage..." button.
+3. In the dialog that appears, click the "+" to add a new repository.
+4. Paste the URL for the KiKit Viewer repository JSON file: https://raw.githubusercontent.com/AvetosDesign/KiKitViewer/master/repository.json
+5. Click "OK"
+6. In the Manage Repositories dialog, click "Save".
+7. Back in the Plugin and Content Manager main window, use the repository pull-down at the top to select the KiKit Viewer repository.
+8. Select the KiKit Viewer package and click "Install"
+
+That should be it.  Please contact us if you run into problems.
 
 ### Manual installation
 
