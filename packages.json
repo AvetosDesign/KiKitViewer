@@ -35,36 +35,6 @@
           "install_size": 316615
         },
         {
-          "version": "1.1.5",
-          "status": "stable",
-          "kicad_version": "8.0",
-          "runtime": "swig",
-          "platforms": [
-            "windows",
-            "linux",
-            "macos"
-          ],
-          "download_url": "https://github.com/AvetosDesign/KiKitViewer/releases/download/v1.1.5/kikit-viewer-1.1.5.zip",
-          "download_sha256": "0d35cbba323953bb36284bdaa437854eda86c98298822641d20f58a33c0872a7",
-          "download_size": 118519,
-          "install_size": 316403
-        },
-        {
-          "version": "1.1.4",
-          "status": "stable",
-          "kicad_version": "8.0",
-          "runtime": "swig",
-          "platforms": [
-            "windows",
-            "linux",
-            "macos"
-          ],
-          "download_url": "https://github.com/AvetosDesign/KiKitViewer/releases/download/v1.1.4/kikit-viewer-1.1.4.zip",
-          "download_sha256": "e6092ff5cd74ca3cfca9e04a1f8b5cc9ef103eff6a0981ff38bd0542bf95da11",
-          "download_size": 107200,
-          "install_size": 304316
-        },
-        {
           "version": "1.0.0",
           "status": "stable",
           "kicad_version": "8.0",

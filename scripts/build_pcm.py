@@ -14,6 +14,8 @@ Output:
 from __future__ import annotations
 
 import argparse
+import calendar
+import datetime
 import hashlib
 import json
 import os
@@ -25,6 +27,7 @@ from pathlib import Path
 
 ROOT = Path(__file__).parent.parent
 META_PATH = ROOT / "metadata.json"
+REPO_PATH = ROOT / "repository.json"
 SRC_PKG = ROOT / "src" / "kikit_viewer"
 PLUGINS_DIR = ROOT / "plugins"
 ICON_SRC = ROOT / "KiKitViewerIcon.png"
@@ -120,7 +123,6 @@ def build(update_meta: bool = False) -> None:
 
         # Zip everything — fix time-of-day to noon so sha256 is reproducible
         # within a given build date while keeping a realistic datestamp.
-        import datetime
         _today_noon = (*datetime.date.today().timetuple()[:3], 12, 0, 0)
         with zipfile.ZipFile(zip_path, "w", zipfile.ZIP_DEFLATED) as zf:
             for item in sorted(tmp.rglob("*")):
@@ -148,6 +150,13 @@ def build(update_meta: bool = False) -> None:
         meta["versions"][0]["install_size"] = install_size
         META_PATH.write_text(json.dumps(meta, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
         print("metadata.json updated.")
+
+        today_utc = datetime.date.today()
+        timestamp = calendar.timegm(today_utc.timetuple())
+        repo = json.loads(REPO_PATH.read_text(encoding="utf-8"))
+        repo["packages"]["update_timestamp"] = timestamp
+        REPO_PATH.write_text(json.dumps(repo, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
+        print(f"repository.json update_timestamp set to {timestamp} ({today_utc}).")
     else:
         print("\nPaste into metadata.json versions[0]:")
         print(f'  "download_sha256": "{sha256}",')
