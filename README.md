@@ -19,18 +19,25 @@ A visual panel editor for [KiKit](https://github.com/yaqwsx/KiKit) that runs as 
 
 - **KiCad 8.0** or later
 - **KiKit plugin** installed via KiCad's Plugin Content Manager (PCM)
-- **Python 3.11+** (separate from KiCad's embedded Python)
-- The following Python packages installed in your external Python environment:
+- **Python 3.11+** (separate from KiCad's embedded Python) with PySide6, shapely, and qtawesome
+
+## Installation
+
+### Prerequisites
+#### KiKit plugin
+A full KiKit installation includes three separate parts.  Follow the directions at https://yaqwsx.github.io/KiKit/latest/installation/intro/ to ensure you have the complete system installed.
+
+#### Python 3 with additional packages
+The KiKit Viewer GUI requires a Python installation that includes PySide6, shapely, and qtawesome.  KiCad's bundled Python interpreter does not include these additional packages.  Install Python on your system according to your OS conventions.
+Once Python is installed, you can use the following command to install the required packages:
 
 ```
 pip install PySide6>=6.6 shapely>=2.0 qtawesome>=1.3
 ```
 
-## Installation
+### Installation Via KiCad Plugin and Content Manager (recommended)
 
-### Via KiCad Plugin and Content Manager (recommended)
-
-> PCM submission to the official KiCad repository is pending. In the meantime, you can use the unofficial repository, or you can use the manual method below.
+> PCM submission to the official KiCad repository is pending. In the meantime, you can use our unofficial repository, or you can use the manual method below.
 >
 > **Note:** The KiKit plugin (a separate PCM package) must be installed first regardless of which installation method you use.
 
