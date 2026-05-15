@@ -586,7 +586,7 @@ class MainWindow(QMainWindow):
         try:
             ver = pkg_version("kikit-viewer")
         except PackageNotFoundError:
-            ver = "unknown"
+            from kikit_viewer._version import __version__ as ver
 
         box = QMessageBox(self)
         box.setWindowTitle("About KiKit Viewer")
