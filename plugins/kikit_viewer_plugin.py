@@ -88,6 +88,27 @@ def _is_usable_python(path: Path) -> bool:
     return "WindowsApps" not in resolved
 
 
+def _find_python_via_py_launcher() -> str | None:
+    """Ask the Windows py.exe launcher which Python 3 it would run."""
+    py_exe = shutil.which("py") or r"C:\Windows\py.exe"
+    if not Path(py_exe).exists():
+        return None
+    try:
+        result = subprocess.run(
+            [py_exe, "-3", "-c", "import sys; print(sys.executable)"],
+            capture_output=True,
+            text=True,
+            timeout=10,
+        )
+        if result.returncode == 0:
+            path = result.stdout.strip()
+            if path and Path(path).exists() and _is_usable_python(Path(path)):
+                return path
+    except Exception:
+        pass
+    return None
+
+
 def _find_python() -> str:
     """
     Locate a Python interpreter that is not KiCad's embedded one.
@@ -95,8 +116,9 @@ def _find_python() -> str:
     Priority:
       1. KIKITVIEWER_PYTHON environment variable
       2. Project .venv (sibling of the plugin dir)
-      3. Common fixed install locations (Windows, macOS)
-      4. 'python3' / 'python' on the system PATH (skipping KiCad and Windows Store stubs)
+      3. Windows py.exe launcher (finds registered interpreters including non-standard paths)
+      4. Common fixed install locations (Windows, macOS)
+      5. 'python3' / 'python' on the system PATH (skipping KiCad and Windows Store stubs)
     """
     # 1. Explicit override via environment variable
     override = os.environ.get("KIKITVIEWER_PYTHON")
@@ -111,13 +133,24 @@ def _find_python() -> str:
         if candidate.exists():
             return str(candidate)
 
-    # 3. Common fixed locations
+    kicad_bin = Path(sys.executable).parent
+
     if sys.platform == "win32":
+        # 3. py.exe launcher — resolves the user's default Python 3, including
+        #    non-standard install locations like C:\Spyder\6.0\python.exe
+        launcher_result = _find_python_via_py_launcher()
+        if launcher_result:
+            found_path = Path(launcher_result).resolve()
+            try:
+                found_path.relative_to(kicad_bin.parent)
+            except ValueError:
+                return launcher_result  # not inside KiCad tree
+
+        # 4a. Common fixed Windows locations
         localappdata = Path(os.environ.get("LOCALAPPDATA", "C:/Users/Public"))
         programfiles = Path(os.environ.get("PROGRAMFILES", "C:/Program Files"))
         candidates: list[Path] = []
         for version in range(14, 7, -1):  # 3.14 → 3.8
-            tag = f"3{version}" if version >= 10 else f"3{version}"
             candidates += [
                 localappdata / "Programs" / "Python" / f"Python3{version}" / "python.exe",
                 programfiles / "Python" / f"Python3{version}" / "python.exe",
@@ -126,7 +159,9 @@ def _find_python() -> str:
         for c in candidates:
             if c.exists() and _is_usable_python(c):
                 return str(c)
+
     elif sys.platform == "darwin":
+        # 4b. Common macOS locations
         for candidate in (
             Path("/opt/homebrew/bin/python3"),
             Path("/usr/local/bin/python3"),
@@ -135,8 +170,7 @@ def _find_python() -> str:
             if candidate.exists():
                 return str(candidate)
 
-    # 4. System PATH — skip KiCad's tree and Windows Store stubs
-    kicad_bin = Path(sys.executable).parent
+    # 5. System PATH — skip KiCad's tree and Windows Store stubs
     for name in ("python3", "python"):
         found = shutil.which(name)
         if found:

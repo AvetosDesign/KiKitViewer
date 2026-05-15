@@ -355,11 +355,12 @@ class MainWindow(QMainWindow):
 
         view_menu.addSeparator()
         view_menu.addAction(self._layers_dock.toggleViewAction())
-        view_menu.addAction(self._debug_dock.toggleViewAction())
 
         # Help menu
         help_menu = bar.addMenu("&Help")
         help_menu.addAction("&About KiKit Viewer…", self._show_about)
+        help_menu.addSeparator()
+        help_menu.addAction(self._debug_dock.toggleViewAction())
 
         QShortcut(QKeySequence(Qt.Key.Key_Home), self, self._view.fit_panel)
 
@@ -592,8 +593,14 @@ class MainWindow(QMainWindow):
         box.setTextFormat(Qt.TextFormat.RichText)
         box.setText(
             f"<b>KiKit Viewer</b> v{ver}<br><br>"
-            f'<a href="https://github.com/AvetosDesign/KiKitViewer">'
+            f"A KiCad plugin to extend the functionality of KiKit by "
+            f"Jan Mrázek.  We offer a special thanks to Jan for his hard "
+            f"work and excellent contribution.<br><br>"
+            f'GitHub repo: <a href="https://github.com/AvetosDesign/KiKitViewer">'
             f"github.com/AvetosDesign/KiKitViewer</a>"
+            f"<br>"
+            f'KiKit repo: <a href="https://github.com/yaqwsx/KiKit">'
+            f"github.com/yaqwsx/KiKit</a>"
         )
         box.setTextInteractionFlags(Qt.TextInteractionFlag.TextBrowserInteraction)
         box.exec()
@@ -822,7 +829,6 @@ class MainWindow(QMainWindow):
         self._on_config_changed()
         self._sync_tab_mode()
 
-    # This handler fires with a list of boards selected in a layout widget
     def _on_boards_selected(self, boards: list[BoardEntry]) -> None:
         """
         Updates the selection state of the BoardOverlayItems in response to
@@ -842,7 +848,7 @@ class MainWindow(QMainWindow):
     def _on_board_highlighted(self, data: BoardSceneData) -> None:
         self._on_boards_selected([(0, data)])
 
-    # Run manager
+    # Run manager handling
     def _on_run_started(self) -> None:
         self._set_status("Running KiKit…")
 
@@ -870,7 +876,7 @@ class MainWindow(QMainWindow):
             olay = BoardOverlayItem(brd_data, self, outline=self._board_outline)
             self._scene.addItem(olay)
             olay.set_view_scale(self._view.transform().m11())
-            
+
             # Connect the overlay to our signals
             olay.position_changed.connect(self._on_overlay_position_changed)
             olay.overlay_tapped.connect(self._on_overlay_tapped)
@@ -893,7 +899,7 @@ class MainWindow(QMainWindow):
         if self._auto_fit_btn.isChecked():
             self._view.fit_panel()
         self._layout_panel.restore_highlight()
-        
+
         self._update_debug_dock()
         self._set_status("Panel updated")
 
