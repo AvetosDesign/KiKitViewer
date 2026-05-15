@@ -257,25 +257,86 @@ def _show_missing_kikit_error() -> None:
 
 def _show_missing_deps_error(missing: list[str], python_exe: str) -> None:
     pkgs = " ".join(missing)
-    msg = (
+    prompt = (
         "KiKit Viewer: missing Python dependencies.\n\n"
         "The following packages are not available in the selected Python interpreter:\n"
         f"  {', '.join(missing)}\n\n"
-        f"Selected interpreter:\n"
-        f"  {python_exe}\n\n"
-        f"Install them with:\n"
-        f"  pip install {pkgs}\n\n"
-        "If the interpreter shown above is not the one you intended, set the\n"
-        "KIKITVIEWER_PYTHON environment variable to the full path of the correct\n"
-        "Python executable and restart KiCad.\n\n"
-        "Then restart KiCad."
+        f"Interpreter: {python_exe}\n\n"
+        "Would you like to install them now?\n"
+        "(PySide6 is large — this may take several minutes.)\n\n"
+        "If the interpreter shown above is not the one you intended, click\n"
+        "Cancel and set the KIKITVIEWER_PYTHON environment variable to the\n"
+        "correct Python executable, then restart KiCad."
     )
     try:
         import wx  # type: ignore[import]
 
-        wx.MessageBox(msg, "KiKit Viewer", wx.OK | wx.ICON_ERROR)
+        dlg = wx.MessageDialog(
+            None, prompt, "KiKit Viewer — Missing Dependencies",
+            wx.OK | wx.CANCEL | wx.ICON_WARNING,
+        )
+        dlg.SetOKCancelLabels("Install Now", "Cancel")
+        result = dlg.ShowModal()
+        dlg.Destroy()
+
+        if result != wx.ID_OK:
+            return
+
+        env = _clean_env()
+        proc = subprocess.Popen(
+            [python_exe, "-m", "pip", "install", "--no-input", *missing],
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            env=env,
+        )
+
+        progress = wx.ProgressDialog(
+            "KiKit Viewer — Installing packages",
+            f"Installing: {pkgs}\n",
+            maximum=100,
+            parent=None,
+            style=wx.PD_APP_MODAL | wx.PD_CAN_ABORT | wx.PD_ELAPSED_TIME,
+        )
+
+        cancelled = False
+        while proc.poll() is None:
+            cont, _ = progress.Pulse()
+            if not cont:
+                proc.terminate()
+                cancelled = True
+                break
+            wx.MilliSleep(200)
+
+        progress.Destroy()
+
+        if cancelled:
+            wx.MessageBox(
+                "Installation cancelled.\n\n"
+                f"To install manually:\n  pip install {pkgs}",
+                "KiKit Viewer", wx.OK | wx.ICON_INFORMATION,
+            )
+            return
+
+        if proc.returncode == 0:
+            wx.MessageBox(
+                "Packages installed successfully!\n\n"
+                "Please launch KiKit Viewer again.",
+                "KiKit Viewer", wx.OK | wx.ICON_INFORMATION,
+            )
+        else:
+            stderr = proc.stderr.read().decode(errors="replace") if proc.stderr else ""
+            wx.MessageBox(
+                f"Installation failed.\n\n{stderr}\n\n"
+                f"To install manually:\n  pip install {pkgs}",
+                "KiKit Viewer", wx.OK | wx.ICON_ERROR,
+            )
+
     except Exception:
-        print(msg, file=sys.stderr)
+        print(
+            f"KiKit Viewer: missing packages: {pkgs}\n"
+            f"Install with: {python_exe} -m pip install {pkgs}",
+            file=sys.stderr,
+        )
 
 
 class KiKitViewerPlugin(pcbnew.ActionPlugin if pcbnew else object):
