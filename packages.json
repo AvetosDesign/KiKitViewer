@@ -1,5 +1,6 @@
 {
   "$schema": "https://go.kicad.org/pcm/schemas/v1",
+  "update_timestamp": 1778812911,
   "packages": [
     {
       "$schema": "https://go.kicad.org/pcm/schemas/v2",
