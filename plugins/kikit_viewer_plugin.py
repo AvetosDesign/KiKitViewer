@@ -385,12 +385,31 @@ class KiKitViewerPlugin(pcbnew.ActionPlugin if pcbnew else object):
         # and where KiCad's site-packages live (so the worker can import pcbnew/kikit).
         env["KICAD_PYTHON"] = _KICAD_PYTHON
 
-        subprocess.Popen(
+        proc = subprocess.Popen(
             [python_exe, str(_MAIN_SCRIPT), board_path],
             env=env,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
             # Detach so closing pcbnew doesn't kill the viewer
             creationflags=subprocess.DETACHED_PROCESS if sys.platform == "win32" else 0,
+            start_new_session=sys.platform != "win32",
         )
+
+        # Brief pause to catch immediate startup failures (import errors,
+        # missing Qt platform plugins, etc.) before they vanish silently.
+        import time
+        time.sleep(0.5)
+        if proc.poll() is not None:
+            stderr = proc.stderr.read().decode(errors="replace") if proc.stderr else ""
+            try:
+                import wx  # type: ignore[import]
+                wx.MessageBox(
+                    f"KiKit Viewer failed to start.\n\n{stderr}",
+                    "KiKit Viewer", wx.OK | wx.ICON_ERROR,
+                )
+            except Exception:
+                print(f"KiKit Viewer failed to start:\n{stderr}", file=sys.stderr)
+            return
 
         # Tell pcbnew we haven't modified the board.  Belt-and-suspenders
         # alongside copying the board to a temp dir in the worker; covers the
