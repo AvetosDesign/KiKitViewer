@@ -118,11 +118,16 @@ def build(update_meta: bool = False) -> None:
             if fallback.exists():
                 shutil.copy2(fallback, resources_dst / "icon.png")
 
-        # Zip everything
+        # Zip everything — fix time-of-day to noon so sha256 is reproducible
+        # within a given build date while keeping a realistic datestamp.
+        import datetime
+        _today_noon = (*datetime.date.today().timetuple()[:3], 12, 0, 0)
         with zipfile.ZipFile(zip_path, "w", zipfile.ZIP_DEFLATED) as zf:
             for item in sorted(tmp.rglob("*")):
                 if item.is_file():
-                    zf.write(item, item.relative_to(tmp))
+                    info = zipfile.ZipInfo(str(item.relative_to(tmp)), date_time=_today_noon)
+                    info.compress_type = zipfile.ZIP_DEFLATED
+                    zf.writestr(info, item.read_bytes())
 
     # Stats — read install_size from the zip's stored uncompressed sizes so it
     # matches exactly what the PCM validator measures when it extracts the archive.
