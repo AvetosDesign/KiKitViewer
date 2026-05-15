@@ -1,0 +1,14 @@
+{
+  "$schema": "https://go.kicad.org/pcm/schemas/v1",
+  "name": "KiKit Viewer",
+  "description": "KiKit Viewer PCM repository",
+  "maintainer": {
+    "name": "Avetos Design",
+    "contact": {
+      "email": "engineering@avetosdesign.com"
+    }
+  },
+  "packages": {
+    "url": "https://raw.githubusercontent.com/AvetosDesign/KiKitViewer/master/packages.json"
+  }
+}
