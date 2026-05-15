@@ -133,18 +133,16 @@ def _find_python() -> str:
         if candidate.exists():
             return str(candidate)
 
-    kicad_bin = Path(sys.executable).parent
+    # Resolved path of KiCad's own interpreter — used to skip it in searches
+    kicad_python = Path(_KICAD_PYTHON).resolve()
 
     if sys.platform == "win32":
         # 3. py.exe launcher — resolves the user's default Python 3, including
         #    non-standard install locations like C:\Spyder\6.0\python.exe
         launcher_result = _find_python_via_py_launcher()
         if launcher_result:
-            found_path = Path(launcher_result).resolve()
-            try:
-                found_path.relative_to(kicad_bin.parent)
-            except ValueError:
-                return launcher_result  # not inside KiCad tree
+            if Path(launcher_result).resolve() != kicad_python:
+                return launcher_result
 
         # 4a. Common fixed Windows locations
         localappdata = Path(os.environ.get("LOCALAPPDATA", "C:/Users/Public"))
@@ -167,22 +165,30 @@ def _find_python() -> str:
             Path("/usr/local/bin/python3"),
             Path("/usr/bin/python3"),
         ):
-            if candidate.exists():
+            if candidate.exists() and candidate.resolve() != kicad_python:
                 return str(candidate)
 
-    # 5. System PATH — skip KiCad's tree and Windows Store stubs
+    else:
+        # 4c. Common Linux locations
+        for candidate in (
+            Path("/usr/bin/python3"),
+            Path("/usr/local/bin/python3"),
+        ):
+            if candidate.exists() and candidate.resolve() != kicad_python:
+                return str(candidate)
+
+    # 5. System PATH — skip KiCad's interpreter and Windows Store stubs
     for name in ("python3", "python"):
         found = shutil.which(name)
         if found:
             found_path = Path(found).resolve()
             if not _is_usable_python(found_path):
                 continue
-            try:
-                found_path.relative_to(kicad_bin.parent)
-            except ValueError:
-                return found  # not inside KiCad tree — use it
+            if found_path == kicad_python:
+                continue
+            return found
 
-    return "python"
+    return "python3"
 
 
 def _clean_env() -> dict:
